@@ -5,6 +5,18 @@ Available host: Apple Silicon arm64, macOS **27.0 (26A428)**, Apple clang
 21.0.0, Rust **1.90.0**. Windows and Linux were not executed locally.
 This report records scoped evidence, not full Word parity or a release certification.
 
+## MCP integration — 2026-10-10
+
+The MCP pass adds 14 provider-independent tools in live-window and background
+stdio modes. The official Python MCP SDK 2.3.0 successfully initialized, listed
+tools, read/edited/searched the document, and undid the edit in both modes against
+the packaged macOS executable. Native inspection verified the AI connection
+controls and the restored blank document. Live access was disabled after testing.
+Validation passed formatting, 81 tests (22 core, 23 DOCX, 36 desktop; one manual
+benchmark ignored), clippy with warnings denied, and arm64 packaging. New tests
+cover protocol lifecycles, invalid arguments, Unicode-safe edits, stale-range
+checks, DOCX file guards, live authentication, and access revocation.
+
 ## Editing tools and icons — 2026-10-09 follow-up
 
 The subsequent minimalist refresh passed the same 74-test validation, clippy,

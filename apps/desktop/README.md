@@ -38,6 +38,10 @@ caret affinity at wrapped lines and page boundaries.
   press Escape or Command/Ctrl + Shift + F to return. Appearance and panel
   choices apply to the current session and do not change document content.
 - Find/replace is literal and case-sensitive; matches do not cross paragraphs.
+- View → AI connection enables an authenticated local MCP connection to the
+  current document. `folio-desktop --mcp` serves an independent background
+  document through stdio. Both expose 14 read/edit/format/file tools with shared
+  core validation and undo history. See [MCP setup and tools](../../docs/MCP.md).
   Command/Ctrl-F focuses a stable search field without changing the document
   selection. Search/replacement input never routes into the canvas. Numeric ribbon
   fields retain text focus, and typed values apply at commit rather than per digit.

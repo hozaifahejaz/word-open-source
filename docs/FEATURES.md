@@ -56,7 +56,7 @@ and build; published help scopes are recorded below without invented build numbe
 | Mail merge | Deferred | No data sources, merge fields, envelopes/labels | Desktop/web; ECMA Part 1 |
 | Printing/PDF | Deferred | No print pipeline or PDF export | Desktop/web |
 | Accessibility | Partial | eframe backend enabled; custom editing semantics/screen-reader checks/audit pending | Desktop/web |
-| Automation/add-ins | Deferred | Rust commands only; no VBA/macros/Office add-ins execution | Desktop/web; Web service |
+| Automation/add-ins | Partial | 14 MCP tools for live/background documents; no VBA/macros/Office add-ins execution | [MCP setup](MCP.md); Desktop/web |
 | Legacy/other formats | Deferred | No .doc, .docm, .dot/.dotx, RTF or ODT codec | MS-DOC; ECMA |
 | Cloud/AI | Deferred | No OneDrive/accounts, online services, dictation or AI assistant | Create document; Mobile Copilot |
 | Browser/mobile | Deferred | Windows/macOS/Linux native first; web/iOS/Android front ends later | Web service; Mobile Copilot |

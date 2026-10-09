@@ -4,6 +4,9 @@ Project author: hozaifahejaz.
 
 ## Unreleased
 
+- Add a provider-independent MCP interface with 14 document tools, authenticated
+  live-window access, separate background sessions, discoverable argument schemas,
+  undoable edits and protected DOCX saving. View → AI connection copies client setup.
 - Add a distraction-free Focus mode with Escape and Command/Ctrl + Shift + F
   shortcuts, a session-only light/dark appearance switch, and a document info
   panel with page, word, character, and selection statistics.

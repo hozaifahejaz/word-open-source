@@ -2,6 +2,7 @@ mod editing;
 mod files;
 mod icons;
 mod layout;
+mod mcp;
 mod theme;
 use document_core::*;
 use editing::{Action, move_to};
@@ -50,6 +51,8 @@ struct FolioApp {
     dark_mode: bool,
     focus_mode: bool,
     show_document_info: bool,
+    show_ai_connection: bool,
+    ai_bridge: Option<mcp::Bridge>,
     allow_close: bool,
 }
 impl Default for FolioApp {
@@ -81,11 +84,73 @@ impl Default for FolioApp {
             dark_mode: false,
             focus_mode: false,
             show_document_info: false,
+            show_ai_connection: false,
+            ai_bridge: None,
             allow_close: false,
         }
     }
 }
 impl FolioApp {
+    fn process_ai_requests(&mut self, ctx: &egui::Context) {
+        let requests: Vec<_> = self
+            .ai_bridge
+            .as_ref()
+            .map(|bridge| bridge.receiver.try_iter().take(8).collect())
+            .unwrap_or_default();
+        for request in requests {
+            let result = mcp::call(self, &request.name, request.args);
+            let _ = request.reply.send(result);
+            ctx.request_repaint();
+        }
+    }
+    fn ai_connection_window(&mut self, ctx: &egui::Context) {
+        if !self.show_ai_connection {
+            return;
+        }
+        let mut open = self.show_ai_connection;
+        egui::Window::new("AI connection")
+            .open(&mut open)
+            .default_width(510.0)
+            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.heading("Connect an AI assistant");
+                ui.label("Use an MCP-compatible client to read and edit this document. AI edits appear here and share your undo history.");
+                ui.add_space(10.0);
+                if self.ai_bridge.is_some() {
+                    ui.colored_label(theme::ACCENT, "Live access enabled");
+                    if ui.add(IconButton::new(Icon::Close, "Disable live access")).clicked() {
+                        self.ai_bridge = None;
+                        self.notice = "AI connection disabled".into();
+                    }
+                } else if ui.add(IconButton::new(Icon::Connection, "Enable live access")).clicked() {
+                    match mcp::Bridge::start(ctx.clone()) {
+                        Ok(bridge) => self.ai_bridge = Some(bridge),
+                        Err(error) => self.error = Some(format!("Could not enable AI connection: {error}")),
+                    }
+                }
+                if let Some(bridge) = &self.ai_bridge {
+                    ui.label("Copy this configuration into your AI client's MCP settings. It applies to this Folio window until you disable access or quit.");
+                    let config = serde_json::to_string_pretty(&bridge.configuration()).unwrap();
+                    if ui.add(IconButton::new(Icon::Copy, "Copy MCP configuration")).clicked() {
+                        ctx.copy_text(config.clone());
+                    }
+                    ui.collapsing("View configuration", |ui| {
+                        egui::ScrollArea::both().max_height(160.0).show(ui, |ui| {
+                            ui.add(egui::Label::new(egui::RichText::new(config).monospace()).wrap_mode(egui::TextWrapMode::Extend));
+                        });
+                    });
+                }
+                ui.separator();
+                ui.strong("Background documents");
+                ui.label("For an independent session without a window, configure the Folio executable with the argument --mcp. Save the document before ending that session.");
+                if ui.add(IconButton::new(Icon::Copy, "Copy background configuration")).clicked() {
+                    let config = serde_json::json!({"mcpServers":{"folio-background":{"command":std::env::current_exe().unwrap_or_default().to_string_lossy(),"args":["--mcp"]}}});
+                    ctx.copy_text(serde_json::to_string_pretty(&config).unwrap());
+                }
+            });
+        self.show_ai_connection = open;
+    }
     fn execute(&mut self, command: Command) {
         self.visual_line = None;
         match self.editor.execute(command) {
@@ -552,6 +617,14 @@ impl FolioApp {
                             .small()
                             .color(theme::muted(self.dark_mode)),
                     );
+                    if self.ai_bridge.is_some()
+                        && ui
+                            .add(IconButton::new(Icon::Connection, "AI access enabled").compact())
+                            .on_hover_text("Live AI access is enabled. Open connection settings.")
+                            .clicked()
+                    {
+                        self.show_ai_connection = true;
+                    }
                 });
             });
     }
@@ -1027,6 +1100,13 @@ impl FolioApp {
                             .clicked()
                         {
                             self.toggle_document_info();
+                        }
+                        if ui
+                            .add(IconButton::new(Icon::Connection, "AI connection"))
+                            .on_hover_text("Connect an MCP-compatible AI client to Folio")
+                            .clicked()
+                        {
+                            self.show_ai_connection = true;
                         }
                     });
                 }
@@ -1659,6 +1739,7 @@ fn word_edge(doc: &Document, at: Position, forward: bool) -> Position {
 }
 impl eframe::App for FolioApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.process_ai_requests(ctx);
         if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.request(Pending::Quit, ctx);
@@ -1690,6 +1771,13 @@ impl eframe::App for FolioApp {
                     let selected = editing::selection_statistics(&self.editor);
                     ui.separator();
                     ui.label(format!("Selected: {} words • {} characters", selected.words, selected.characters));
+                }
+                if self.ai_bridge.is_some() && ui
+                    .add(IconButton::new(Icon::Connection, "AI access enabled"))
+                    .on_hover_text("Live AI access is enabled. Open connection settings to disable it.")
+                    .clicked()
+                {
+                    self.show_ai_connection = true;
                 }
                 ui.separator();
                 let (status, color) = if self.editor.is_dirty() {
@@ -1726,6 +1814,7 @@ impl eframe::App for FolioApp {
         }
         self.document_info_panel(ctx);
         self.paint_canvas(ctx, layout);
+        self.ai_connection_window(ctx);
         let title = format!(
             "{}{} — Folio",
             self.path
@@ -1739,6 +1828,28 @@ impl eframe::App for FolioApp {
     }
 }
 fn main() -> eframe::Result {
+    let arguments: Vec<_> = std::env::args().skip(1).collect();
+    if !arguments.is_empty() {
+        let result = match arguments.as_slice() {
+            [mode] if mode == "--mcp" => mcp::background(),
+            [mode, address] if mode == "--mcp-connect" => match std::env::var("FOLIO_MCP_TOKEN") {
+                Ok(token) => mcp::connect(address, &token),
+                Err(_) => Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Missing FOLIO_MCP_TOKEN; copy configuration from View → AI connection",
+                )),
+            },
+            _ => {
+                eprintln!("Usage: folio-desktop [--mcp | --mcp-connect ADDRESS]");
+                std::process::exit(2);
+            }
+        };
+        if let Err(error) = result {
+            eprintln!("Folio MCP: {error}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     eframe::run_native(
         "Folio",
         eframe::NativeOptions {

@@ -10,6 +10,8 @@ The DOCX codec imports/exports a documented subset, resolves inherited styles,
 and warns about omitted or approximated content. Warned imports require a separate
 converted copy; their source and filesystem aliases cannot be overwritten.
 Tables, images, lists, headers/footers, reviewing, printing and proofing are deferred.
+An [MCP interface](docs/MCP.md) lets compatible AI clients read and edit the live
+document or use independent background sessions through 14 provider-neutral tools.
 See [feature boundaries](docs/FEATURES.md) and [actual acceptance results](docs/ACCEPTANCE.md).
 
 ## Apple Silicon local app
@@ -63,7 +65,7 @@ CI results and native Windows/Linux GUI behavior remain separate from Mac result
 | --- | --- | --- |
 | `document-core` | Pure model, commands, selection, history and warnings | Implemented; 22 regression tests |
 | `folio-docx` | Bounded ZIP/XML DOCX subset conversion | Implemented; 23 codec tests |
-| `folio-desktop` | Native rich-text canvas, dialogs and atomic saves | Implemented; 29 regression tests and a manual layout benchmark |
+| `folio-desktop` | Native rich-text canvas, dialogs, MCP and atomic saves | Implemented; 36 regression tests and a manual layout benchmark |
 
 Keep mutations in shared core commands and filesystem operations in the app.
 `Cargo.lock` fixes transitive dependencies; normal builds use `--locked`.

@@ -41,6 +41,7 @@ and build; published help scopes are recorded below without invented build numbe
 | Selection/editing | Supported | Grapheme-safe commands, selection, history, visual navigation; IME event support, OS verification limited | Design/edit; contracts |
 | Editing toolbar/statistics | Supported | Labeled original icons, plain-text Cut/Copy/Paste, clear text formatting; document/selection whitespace-word and grapheme counts | Desktop guide |
 | Find/replace | Supported | Literal paragraph-local, cross-run search; optional Unicode lowercase comparison and UAX #29 whole words; result navigation/counter; regex deferred | Design/edit; contracts |
+| Case conversion/symbols | Supported | Selection-only Unicode upper/lower/title/sentence case; 19 named symbol actions insert at caret or replace selection; undo/redo | [Acceptance evidence](ACCEPTANCE.md) |
 | Alignment/spacing | Supported | Four alignments; before/after and multiple/exact/at-least spacing; indent/tab stops deferred | Desktop/web; ECMA Part 1 |
 | Page settings/breaks | Supported | One size/orientation/margin set and explicit breaks; automatic/explicit pagination implemented | Desktop/web; ECMA Part 1 |
 | Local workspace | Supported | File-tab Recent Documents (12 unique paths), unavailable-entry removal, per-document caret, remembered light/dark appearance and zoom | [Acceptance evidence](ACCEPTANCE.md) |
@@ -68,6 +69,27 @@ Folio does not bundle Word branding, templates or assets. Use original fixtures
 and record supported elements, approximations and rejected features explicitly.
 Unknown imported content must warn rather than quietly disappear on save.
 Update statuses after implementation; planned work is not supported behavior.
+
+## Writing tools increment — 2026-10-10
+
+The Home toolbar's Aa menu converts a non-empty selection to uppercase,
+lowercase, title case or sentence case using Rust Unicode mappings. Title case
+uppercases the first original grapheme of each Unicode-whitespace-delimited token
+and lowercases its remainder. Sentence case lowercases text, then uppercases the
+first non-whitespace grapheme and the first after `.`, `?` or `!` followed by
+whitespace. Whitespace and punctuation stay intact. Changes use `ReplaceText`,
+collapse the selection at the replacement end, and support Undo/Redo; a caret
+alone leaves text unchanged.
+
+Symbols offers 19 named, keyboard-reachable actions: nonbreaking space/hyphen,
+em dash, ellipsis, bullet, copyright, pound/euro/yen, plus/minus,
+multiplication/division, four arrows, check mark, grinning face and red heart
+(including its emoji variation selector). Insertion replaces the current selection
+or inserts at the caret, closes the picker and returns focus to the document.
+These are literal characters, including the bullet; they do not implement list
+formatting. Date/time insertion, custom replacements and emoji search remain
+**Deferred**. Native screen-reader and glyph-rendering limitations remain as
+recorded in [acceptance evidence](ACCEPTANCE.md).
 
 ## Search increment — 2026-10-10
 

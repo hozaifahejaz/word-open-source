@@ -5,6 +5,41 @@ Available host: Apple Silicon arm64, macOS **27.0 (26A428)**, Apple clang
 21.0.0, Rust **1.90.0**. Windows and Linux were not executed locally.
 This report records scoped evidence, not full Word parity or a release certification.
 
+## Writing tools increment — 2026-10-10
+
+Task 2 adds the selection-only Aa case menu and the labeled Symbols picker.
+Tests use the real egui ribbon/canvas, pointer events, keyboard events and
+accessibility output. No native bundle smoke, release packaging, Windows/Linux
+GUI run, or screen-reader audit was performed for this increment.
+
+| Automated check | Observed result |
+| --- | --- |
+| `cargo fmt --all -- --check` | PASS, exit 0 |
+| `cargo test --workspace --offline --locked` | PASS: 29 core commands + 5 core recovery + 92 desktop + 23 DOCX = 149 passed; 0 failed; one manual desktop benchmark ignored |
+| `cargo clippy --workspace --all-targets --offline --locked -- -D warnings` | PASS, exit 0 |
+
+Four new integration tests cover all four transformations with Unicode case
+expansion (`ß`, `İ`), original-grapheme title casing (`İETA` → `İeta`), combining
+marks, contextual Greek lowercase, emoji, punctuation, tabs/newlines/nonbreaking
+spaces, and sentence punctuation without following whitespace. Reversed selection
+conversion collapses at its new byte end; Undo restores text, selection and clean
+state, and Redo reapplies it. Caret-only conversion does not mutate text or dirty
+state. The 19 symbol sequences are checked individually, both at a caret and over
+a reversed selection, including `U+2764 U+FE0F` red heart; each returns canvas focus,
+requests reveal, dismisses the picker and supports Undo/Redo. Accessibility output
+exposes Change case, its four actions, Symbols and all 19 spoken insertion names.
+Tab reaches the Symbols control and Enter opens its picker. Tab then reaches
+every symbol action; Enter inserts the red heart without inserting an extra
+paragraph, and subsequent typing returns to the canvas.
+
+The initial tests failed on absent Aa/Symbols controls and accessible names before
+implementation. A further title-case regression failed because lowercasing the
+first original `İ` before uppercasing changed its exact sequence; title case now
+uppercases that original grapheme directly. Final verification output is clean.
+Log: `build/validation/writing-tools-task-2-tests.log` (ignored local artifact).
+Date/time insertion, custom replacements and emoji search are deferred. Existing
+emoji glyph fidelity and native accessibility limits below remain outstanding.
+
 ## Search increment — 2026-10-10
 
 Task 1 adds Match case, Unicode whole words, the visible current-result counter,

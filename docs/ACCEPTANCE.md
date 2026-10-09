@@ -9,18 +9,23 @@ This report records scoped evidence, not full Word parity or a release certifica
 
 Host: macOS **27.0 (26A428)**, arm64, Rust **1.90.0**
 (`1159e78c4 2025-09-14`). Checkout-local Cargo/Rustup, target and scratch directories
-were used. Results below are for the workspace increment through `61fc4c2`;
-earlier acceptance sections remain historical evidence.
+were used. Final formatting, tests and clippy results cover the workspace increment
+through `add8019`. Packaging and native smoke below were performed before that
+scoped lint fix, through `61fc4c2`; earlier sections remain historical evidence.
 
 | Automated check | Observed result |
 | --- | --- |
 | `cargo fmt --all -- --check` | PASS, exit 0, no output |
 | `cargo test --workspace --offline --locked` | PASS: 22 core + 5 core recovery integration + 23 DOCX + 81 desktop = 131 passed; 0 failed; one manual desktop benchmark ignored |
-| `cargo clippy --workspace --all-targets --offline --locked -- -D warnings` | FAIL: four `collapsible_if` findings in `apps/desktop/src/main.rs` at lines 244, 305, 410 and 510; code fix and final rerun required |
+| `cargo clippy --workspace --all-targets --offline --locked -- -D warnings` | PASS, exit 0 after scoped lint fix `add8019` |
 | `sh scripts/package-macos.sh` | PASS: release build, plist lint, arm64 Mach-O verification; unsigned local bundle rebuilt |
 
-Logs are `build/validation/workspace-recovery-{tests,clippy,package}.log` (ignored
-local artifacts). No Windows/Linux native checks or remote CI results are implied.
+The initial clippy attempt reported four `collapsible_if` findings in `main.rs`;
+`add8019` resolved them. The controller reran all three code checks after that fix:
+formatting exited 0, tests passed with the counts above, and clippy exited 0.
+The initial task logs are `build/validation/workspace-recovery-{tests,clippy,package}.log`
+(ignored local artifacts); their clippy failure is superseded by this final rerun.
+No Windows/Linux native checks or remote CI results are implied.
 
 The rebuilt `dist/Folio.app` was exercised with native UI automation, accessibility
 state and screenshots using disposable writing/fixtures:

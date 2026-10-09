@@ -1,6 +1,6 @@
 //! Provider-independent MCP over stdio, with an authenticated loopback bridge
 //! for the visible editor. Tool execution always stays on the editor's thread.
-use crate::{FolioApp, editing, files};
+use crate::{FolioApp, editing};
 use document_core::*;
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -372,10 +372,7 @@ pub fn call(app: &mut FolioApp, name: &str, arguments: Value) -> Result<Value, S
         "folio_new_document" => {
             let a: New = args(arguments)?;
             check_unsaved(app, a.discard_unsaved)?;
-            app.editor = Editor::default();
-            app.path = None;
-            app.protected = None;
-            app.warnings.clear();
+            app.new_document()?;
             reset_edit_state(app);
             return Ok(document(app));
         }
@@ -383,13 +380,7 @@ pub fn call(app: &mut FolioApp, name: &str, arguments: Value) -> Result<Value, S
             let a: Open = args(arguments)?;
             check_path(&a.path)?;
             check_unsaved(app, a.discard_unsaved)?;
-            let report = files::open(&a.path)?;
-            app.editor
-                .load_document(report.document)
-                .map_err(|e| e.to_string())?;
-            app.protected = (!report.warnings.is_empty()).then(|| a.path.clone());
-            app.path = Some(a.path);
-            app.warnings = report.warnings;
+            app.open_document(a.path)?;
             reset_edit_state(app);
             return Ok(document(app));
         }
@@ -401,9 +392,7 @@ pub fn call(app: &mut FolioApp, name: &str, arguments: Value) -> Result<Value, S
                     "Destination exists: explicitly set overwrite=true to replace it".into(),
                 );
             }
-            files::save(app.editor.document(), &a.path, app.protected.as_deref())?;
-            app.editor.mark_saved();
-            app.path = Some(a.path);
+            app.save_document(a.path)?;
             app.notice = "Saved through MCP".into();
             return Ok(json!({"saved":true,"path":app.path.as_ref().map(|p|p.to_string_lossy())}));
         }

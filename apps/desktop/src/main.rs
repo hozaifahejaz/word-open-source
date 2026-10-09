@@ -64,6 +64,7 @@ struct FolioApp {
     autosave_checkpoint: CheckpointDebounce,
     observed_document: Document,
     last_recovery_document: Option<Document>,
+    recovery_cleanup_pending: bool,
 }
 impl Default for FolioApp {
     fn default() -> Self {
@@ -102,6 +103,7 @@ impl Default for FolioApp {
             autosave_checkpoint: CheckpointDebounce::default(),
             observed_document: Document::default(),
             last_recovery_document: None,
+            recovery_cleanup_pending: false,
         }
     }
 }
@@ -168,14 +170,68 @@ impl FolioApp {
         if let Some(store) = &self.workspace_store {
             if let Err(error) = store.clear_recovery() {
                 self.error = Some(format!("Could not clear recovery: {error}"));
+                self.recovery_cleanup_pending = true;
                 return false;
             }
         }
         self.last_recovery_document = None;
+        self.recovery_cleanup_pending = false;
         self.recovery_checkpoint.clear();
         self.autosave_checkpoint.clear();
         self.observed_document = self.editor.document().clone();
         true
+    }
+    fn new_document(&mut self) -> Result<(), String> {
+        if !self.clear_recovery() {
+            return Err(self.error.clone().unwrap());
+        }
+        self.editor = Editor::default();
+        self.path = None;
+        self.protected = None;
+        self.warnings.clear();
+        self.typing = None;
+        self.notice.clear();
+        self.focus_canvas = true;
+        self.observed_document = self.editor.document().clone();
+        Ok(())
+    }
+    fn open_document(&mut self, path: PathBuf) -> Result<(), String> {
+        let report = files::open(&path)?;
+        // Validate the incoming document before cleanup, and retain the current editor
+        // until both validation and recovery cleanup have succeeded.
+        let mut editor = self.editor.clone();
+        editor
+            .load_document(report.document)
+            .map_err(|error| error.to_string())?;
+        if !self.clear_recovery() {
+            return Err(self.error.clone().unwrap());
+        }
+        self.editor = editor;
+        self.protected = (!report.warnings.is_empty()).then(|| path.clone());
+        self.path = Some(path);
+        self.warnings = report.warnings;
+        self.typing = None;
+        self.notice = "Document opened".into();
+        self.focus_canvas = true;
+        self.reveal = true;
+        self.observed_document = self.editor.document().clone();
+        Ok(())
+    }
+    fn save_document(&mut self, path: PathBuf) -> Result<(), String> {
+        files::save(self.editor.document(), &path, self.protected.as_deref())?;
+        self.editor.mark_saved();
+        self.path = Some(path);
+        self.notice = "Saved".into();
+        self.focus_canvas = true;
+        if !self.clear_recovery() {
+            let error = format!(
+                "Document saved, but recovery cleanup failed: {}",
+                self.error.as_deref().unwrap()
+            );
+            self.error = Some(error.clone());
+            return Err(error);
+        }
+        Ok(())
     }
     fn process_checkpoints(&mut self, now: Instant, ctx: &egui::Context) {
         if self.allow_close {
@@ -460,44 +516,24 @@ impl FolioApp {
     fn perform(&mut self, pending: Pending, ctx: &egui::Context) {
         match pending {
             Pending::New => {
-                if !self.clear_recovery() {
-                    return;
+                if let Err(error) = self.new_document() {
+                    self.error = Some(error);
                 }
-                self.editor = Editor::default();
-                self.path = None;
-                self.protected = None;
-                self.warnings.clear();
-                self.typing = None;
-                self.notice.clear();
-                self.focus_canvas = true;
             }
             Pending::Open => {
                 if let Some(path) = rfd::FileDialog::new()
                     .add_filter("Word document", &["docx"])
                     .pick_file()
                 {
-                    match files::open(&path) {
-                        Ok(report) => match self.editor.load_document(report.document) {
-                            Ok(()) => {
-                                self.clear_recovery();
-                                self.protected =
-                                    (!report.warnings.is_empty()).then(|| path.clone());
-                                self.path = Some(path);
-                                self.warnings = report.warnings;
-                                self.typing = None;
-                                self.notice = "Document opened".into();
-                                self.focus_canvas = true;
-                                self.reveal = true;
-                            }
-                            Err(e) => self.error = Some(e.to_string()),
-                        },
-                        Err(e) => {
-                            self.error = Some(format!("Could not open {}: {e}", path.display()))
-                        }
+                    if let Err(error) = self.open_document(path.clone()) {
+                        self.error = Some(format!("Could not open {}: {error}", path.display()));
                     }
                 }
             }
             Pending::Quit => {
+                if self.recovery_cleanup_pending && !self.clear_recovery() {
+                    return;
+                }
                 if !self.flush_recovery() {
                     return;
                 }
@@ -562,20 +598,15 @@ impl FolioApp {
         self.save_to(path, ctx)
     }
     fn save_to(&mut self, path: PathBuf, ctx: &egui::Context) -> bool {
-        match files::save(self.editor.document(), &path, self.protected.as_deref()) {
+        match self.save_document(path.clone()) {
             Ok(()) => {
-                self.editor.mark_saved();
-                self.clear_recovery();
-                self.path = Some(path);
-                self.notice = "Saved".into();
-                self.focus_canvas = true;
                 if let Some(pending) = self.pending.take() {
                     self.perform(pending, ctx);
                 }
                 true
             }
-            Err(e) => {
-                self.error = Some(format!("Could not save {}: {e}", path.display()));
+            Err(error) => {
+                self.error = Some(format!("Could not finish save {}: {error}", path.display()));
                 false
             }
         }
@@ -2076,6 +2107,134 @@ mod app_tests {
         assert_eq!(snapshot.warnings[0].message, "Table omitted");
         assert_eq!(snapshot.selection.anchor, Position::new(0, 1));
         assert_eq!(snapshot.selection.focus, Position::new(0, 4));
+    }
+    #[test]
+    fn recovery_mcp_save_new_and_open_clear_snapshots_and_cache() {
+        for operation in [
+            "folio_save_document",
+            "folio_new_document",
+            "folio_open_document",
+        ] {
+            let dir = RecoveryDirectory::new();
+            let mut app = dir.app();
+            app.insert("prior".into());
+            assert!(app.flush_recovery());
+            let target = dir.0.join("target.docx");
+            let arguments = if operation == "folio_new_document" {
+                serde_json::json!({"discard_unsaved":true})
+            } else {
+                if operation == "folio_open_document" {
+                    files::save(&Document::default(), &target, None).unwrap();
+                }
+                serde_json::json!({"path":target, "discard_unsaved":true})
+            };
+            // Save has a separate strict argument schema.
+            let arguments = if operation == "folio_save_document" {
+                serde_json::json!({"path":target})
+            } else {
+                arguments
+            };
+            mcp::call(&mut app, operation, arguments).unwrap();
+            assert!(
+                app.workspace_store
+                    .as_ref()
+                    .unwrap()
+                    .load_recovery()
+                    .unwrap()
+                    .is_none(),
+                "{operation}"
+            );
+            assert!(app.last_recovery_document.is_none(), "{operation}");
+            // Reusing exactly the prior document after a transition must write a fresh snapshot.
+            if operation != "folio_save_document" {
+                app.insert("prior".into());
+                assert!(app.flush_recovery());
+                assert!(
+                    app.workspace_store
+                        .as_ref()
+                        .unwrap()
+                        .load_recovery()
+                        .unwrap()
+                        .is_some()
+                );
+            }
+        }
+    }
+    #[test]
+    fn recovery_cleanup_failure_blocks_save_and_quit_but_keeps_disk_save() {
+        let dir = RecoveryDirectory::new();
+        let mut app = dir.app();
+        app.insert("saved on disk".into());
+        std::fs::create_dir_all(dir.0.join("recovery.json")).unwrap();
+        app.pending = Some(Pending::Quit);
+        let destination = dir.0.join("saved.docx");
+        assert!(!app.save_to(destination.clone(), &egui::Context::default()));
+        assert!(!app.editor.is_dirty());
+        assert_eq!(app.path, Some(destination.clone()));
+        assert_eq!(
+            files::open(&destination)
+                .unwrap()
+                .document
+                .paragraph(0)
+                .unwrap()
+                .text(),
+            "saved on disk"
+        );
+        assert!(app.error.is_some());
+        assert!(matches!(app.pending, Some(Pending::Quit)));
+        assert!(!app.allow_close);
+        app.perform(Pending::Quit, &egui::Context::default());
+        assert!(
+            !app.allow_close,
+            "retry close must still honor failed cleanup"
+        );
+    }
+    #[test]
+    fn recovery_cleanup_failure_blocks_mcp_transitions_and_save_reports_partial_success() {
+        for operation in [
+            "folio_new_document",
+            "folio_open_document",
+            "folio_save_document",
+        ] {
+            let dir = RecoveryDirectory::new();
+            let mut app = dir.app();
+            app.insert("keep current".into());
+            assert!(app.flush_recovery());
+            std::fs::remove_file(dir.0.join("recovery.json")).unwrap();
+            std::fs::create_dir(dir.0.join("recovery.json")).unwrap();
+            std::fs::write(dir.0.join("recovery.json/sentinel"), b"keep snapshot").unwrap();
+            let before = app.editor.document().clone();
+            let destination = dir.0.join("target.docx");
+            if operation == "folio_open_document" {
+                files::save(&Document::default(), &destination, None).unwrap();
+            }
+            let arguments = match operation {
+                "folio_new_document" => serde_json::json!({"discard_unsaved":true}),
+                "folio_open_document" => {
+                    serde_json::json!({"path":destination,"discard_unsaved":true})
+                }
+                _ => serde_json::json!({"path":destination}),
+            };
+            assert!(
+                mcp::call(&mut app, operation, arguments).is_err(),
+                "{operation}"
+            );
+            assert_eq!(app.editor.document(), &before);
+            assert!(app.error.is_some());
+            assert!(app.last_recovery_document.is_some());
+            assert_eq!(
+                std::fs::read(dir.0.join("recovery.json/sentinel")).unwrap(),
+                b"keep snapshot"
+            );
+            if operation == "folio_save_document" {
+                assert!(!app.editor.is_dirty());
+                assert_eq!(app.path, Some(destination.clone()));
+                assert_eq!(files::open(&destination).unwrap().document, before);
+            } else {
+                assert!(app.editor.is_dirty());
+                assert!(app.path.is_none());
+            }
+        }
     }
     #[test]
     fn checkpoint_debounce_coalesces_rapid_edits() {

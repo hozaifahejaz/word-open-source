@@ -72,6 +72,7 @@ struct FolioApp {
     saved_workspace: WorkspaceState,
     state_checkpoint: CheckpointDebounce,
     pending_recovery: Option<RecoverySnapshot>,
+    unreadable_recovery: bool,
 }
 impl Default for FolioApp {
     fn default() -> Self {
@@ -118,6 +119,7 @@ impl Default for FolioApp {
             saved_workspace: WorkspaceState::default(),
             state_checkpoint: CheckpointDebounce::default(),
             pending_recovery: None,
+            unreadable_recovery: false,
         }
     }
 }
@@ -139,11 +141,17 @@ impl FolioApp {
                 // Validate all restored data before offering it; leave the stored file intact.
                 match Self::recovered_editor(&snapshot) {
                     Ok(_) => app.pending_recovery = Some(snapshot),
-                    Err(error) => errors.push(format!("Could not load recovery: {error}")),
+                    Err(error) => {
+                        app.unreadable_recovery = true;
+                        errors.push(format!("Could not load recovery: {error}"));
+                    }
                 }
             }
             Ok(None) => {}
-            Err(error) => errors.push(format!("Could not load recovery: {error}")),
+            Err(error) => {
+                app.unreadable_recovery = true;
+                errors.push(format!("Could not load recovery: {error}"));
+            }
         }
         if !errors.is_empty() {
             app.error = Some(errors.join("\n\n"));
@@ -203,10 +211,12 @@ impl FolioApp {
         true
     }
     fn discard_startup_recovery(&mut self) -> bool {
-        if !self.clear_recovery() {
+        if !self.remove_recovery() {
             return false;
         }
         self.pending_recovery = None;
+        self.unreadable_recovery = false;
+        self.reset_recovery_tracking();
         self.focus_canvas = true;
         self.notice = "Recovery discarded".into();
         true
@@ -281,6 +291,14 @@ impl FolioApp {
             self.recovery_checkpoint.clear();
             return true;
         }
+        if self.unreadable_recovery {
+            self.error = Some(
+                "Could not checkpoint recovery: the unreadable recovery file has been preserved. Save your current document to keep your changes, or choose Discard recovery to delete the old recovery file and enable new checkpoints."
+                    .into(),
+            );
+            self.recovery_checkpoint.clear();
+            return false;
+        }
         let result = self.recovery_snapshot().and_then(|snapshot| {
             self.workspace_store
                 .as_ref()
@@ -302,6 +320,15 @@ impl FolioApp {
         }
     }
     fn clear_recovery(&mut self) -> bool {
+        // An unrelated New/Open/Save only owns this session's valid snapshot.
+        // Unreadable startup recovery requires the separate explicit discard action.
+        if !self.unreadable_recovery && !self.remove_recovery() {
+            return false;
+        }
+        self.reset_recovery_tracking();
+        true
+    }
+    fn remove_recovery(&mut self) -> bool {
         if let Some(store) = &self.workspace_store
             && let Err(error) = store.clear_recovery()
         {
@@ -309,12 +336,14 @@ impl FolioApp {
             self.recovery_cleanup_pending = true;
             return false;
         }
+        true
+    }
+    fn reset_recovery_tracking(&mut self) {
         self.last_recovery_document = None;
         self.recovery_cleanup_pending = false;
         self.recovery_checkpoint.clear();
         self.autosave_checkpoint.clear();
         self.observed_document = self.editor.document().clone();
-        true
     }
     fn new_document(&mut self) -> Result<(), String> {
         self.ensure_recovery_resolved()?;
@@ -2221,6 +2250,15 @@ impl FolioApp {
                 .show(ctx, |ui| {
                     ui.set_max_width(500.0);
                     ui.label(error);
+                    if self.unreadable_recovery {
+                        ui.add_space(8.0);
+                        ui.label("Your recovery file is unchanged. You can close this error and continue opening or saving documents. Discard recovery permanently deletes the unreadable file.");
+                        if ui.button("Discard recovery").clicked()
+                            && self.discard_startup_recovery()
+                        {
+                            self.error = None;
+                        }
+                    }
                     if ui.button("Close error").clicked() {
                         self.error = None;
                         self.focus_canvas = true;
@@ -2951,6 +2989,140 @@ mod app_tests {
             std::fs::read(dir.0.join("workspace.json")).unwrap(),
             b"{broken state"
         );
+    }
+    fn unreadable_recovery_bytes() -> [&'static [u8]; 2] {
+        [
+            b"{broken\n  keep these bytes",
+            b"{\"schema_version\":999,\"data\":{\"future\":true}}\n",
+        ]
+    }
+    #[test]
+    fn unreadable_recovery_survives_new_open_and_save_after_error_dismissal() {
+        for bytes in unreadable_recovery_bytes() {
+            for operation in ["new", "open", "save"] {
+                let dir = RecoveryDirectory::new();
+                let target = lifecycle_file(&dir, "unrelated.docx");
+                let recovery = dir.0.join("recovery.json");
+                std::fs::write(&recovery, bytes).unwrap();
+                let mut app = FolioApp::with_workspace_store(WorkspaceStore::at(dir.0.clone()));
+                assert!(app.error.take().unwrap().contains("recovery"));
+                match operation {
+                    "new" => {
+                        app.insert("discard this session only".into());
+                        app.discard_pending(Pending::New, &egui::Context::default());
+                        assert_eq!(app.editor.document(), &Document::default());
+                        assert!(app.path.is_none());
+                    }
+                    "open" => {
+                        app.open_path(&target).unwrap();
+                        assert_eq!(app.path, Some(target));
+                    }
+                    "save" => {
+                        app.insert("saved document".into());
+                        app.save_document(target.clone()).unwrap();
+                        assert!(!app.editor.is_dirty());
+                        assert_eq!(
+                            files::open(&target).unwrap().document,
+                            *app.editor.document()
+                        );
+                    }
+                    _ => unreachable!(),
+                }
+                assert!(app.error.is_none(), "{operation}");
+                assert_eq!(std::fs::read(&recovery).unwrap(), bytes, "{operation}");
+                app.insert("new checkpoint".into());
+                assert!(!app.flush_recovery(), "{operation}");
+                assert!(app.error.as_ref().unwrap().contains("checkpoint recovery"));
+                assert_eq!(std::fs::read(&recovery).unwrap(), bytes, "{operation}");
+            }
+        }
+    }
+    #[test]
+    fn unreadable_recovery_can_be_explicitly_discarded_from_error_dialog() {
+        for bytes in unreadable_recovery_bytes() {
+            let dir = RecoveryDirectory::new();
+            std::fs::create_dir_all(&dir.0).unwrap();
+            let recovery = dir.0.join("recovery.json");
+            std::fs::write(&recovery, bytes).unwrap();
+            let mut app = FolioApp::with_workspace_store(WorkspaceStore::at(dir.0.clone()));
+            let ctx = egui::Context::default();
+            let mut discard_position = None;
+            for _ in 0..2 {
+                let output = ctx.run(egui::RawInput::default(), |ctx| app.dialogs(ctx));
+                discard_position = output.shapes.iter().find_map(|shape| {
+                    if let egui::Shape::Text(text) = &shape.shape
+                        && text.galley.job.text == "Discard recovery"
+                    {
+                        Some(text.pos + text.galley.size() * 0.5)
+                    } else {
+                        None
+                    }
+                });
+            }
+            assert_eq!(std::fs::read(&recovery).unwrap(), bytes);
+            let position =
+                discard_position.expect("unreadable recovery needs an explicit discard button");
+            for pressed in [true, false] {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        events: vec![
+                            egui::Event::PointerMoved(position),
+                            egui::Event::PointerButton {
+                                pos: position,
+                                button: egui::PointerButton::Primary,
+                                pressed,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ],
+                        ..Default::default()
+                    },
+                    |ctx| app.dialogs(ctx),
+                );
+            }
+            assert!(!recovery.exists());
+            assert!(app.error.is_none());
+            app.insert("recover this session".into());
+            assert!(app.flush_recovery());
+            assert_eq!(
+                app.workspace_store
+                    .as_ref()
+                    .unwrap()
+                    .load_recovery()
+                    .unwrap()
+                    .unwrap()
+                    .document,
+                *app.editor.document()
+            );
+        }
+    }
+    #[test]
+    fn failed_unreadable_recovery_discard_keeps_preservation_until_retry_succeeds() {
+        let dir = RecoveryDirectory::new();
+        std::fs::create_dir_all(&dir.0).unwrap();
+        let recovery = dir.0.join("recovery.json");
+        let bytes = unreadable_recovery_bytes()[0];
+        std::fs::write(&recovery, bytes).unwrap();
+        let mut app = FolioApp::with_workspace_store(WorkspaceStore::at(dir.0.clone()));
+        std::fs::remove_file(&recovery).unwrap();
+        std::fs::create_dir(&recovery).unwrap();
+        std::fs::write(recovery.join("sentinel"), bytes).unwrap();
+        assert!(!app.discard_startup_recovery());
+        assert!(
+            app.error
+                .as_ref()
+                .unwrap()
+                .contains("Could not clear recovery")
+        );
+        assert!(app.unreadable_recovery);
+        assert_eq!(std::fs::read(recovery.join("sentinel")).unwrap(), bytes);
+        std::fs::remove_dir_all(&recovery).unwrap();
+        std::fs::write(&recovery, bytes).unwrap();
+        app.error = None;
+        app.new_document().unwrap();
+        assert_eq!(std::fs::read(&recovery).unwrap(), bytes);
+        assert!(app.discard_startup_recovery());
+        assert!(!recovery.exists());
+        assert!(!app.unreadable_recovery);
     }
     #[test]
     fn invalid_recovery_document_is_reported_and_preserved() {

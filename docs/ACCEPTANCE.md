@@ -5,6 +5,56 @@ Available host: Apple Silicon arm64, macOS **27.0 (26A428)**, Apple clang
 21.0.0, Rust **1.90.0**. Windows and Linux were not executed locally.
 This report records scoped evidence, not full Word parity or a release certification.
 
+## Workspace/recovery increment — 2026-10-10
+
+Host: macOS **27.0 (26A428)**, arm64, Rust **1.90.0**
+(`1159e78c4 2025-09-14`). Checkout-local Cargo/Rustup, target and scratch directories
+were used. Results below are for the workspace increment through `61fc4c2`;
+earlier acceptance sections remain historical evidence.
+
+| Automated check | Observed result |
+| --- | --- |
+| `cargo fmt --all -- --check` | PASS, exit 0, no output |
+| `cargo test --workspace --offline --locked` | PASS: 22 core + 5 core recovery integration + 23 DOCX + 81 desktop = 131 passed; 0 failed; one manual desktop benchmark ignored |
+| `cargo clippy --workspace --all-targets --offline --locked -- -D warnings` | FAIL: four `collapsible_if` findings in `apps/desktop/src/main.rs` at lines 244, 305, 410 and 510; code fix and final rerun required |
+| `sh scripts/package-macos.sh` | PASS: release build, plist lint, arm64 Mach-O verification; unsigned local bundle rebuilt |
+
+Logs are `build/validation/workspace-recovery-{tests,clippy,package}.log` (ignored
+local artifacts). No Windows/Linux native checks or remote CI results are implied.
+
+The rebuilt `dist/Folio.app` was exercised with native UI automation, accessibility
+state and screenshots using disposable writing/fixtures:
+
+| Native case | Observed result |
+| --- | --- |
+| Fresh state | Blank clean document, light appearance, 100% zoom and empty Recent Documents message |
+| Appearance/zoom | Dark appearance displayed readable light controls against dark chrome and white paper; Fit page width displayed 139%. Normal close/relaunch retained 139% and the Light appearance action indicating dark mode. Later smoke ended in light mode. |
+| Untitled crash recovery | Native paste created a dirty draft; recovery file existed. After SIGKILL and relaunch, explicit recovery prompt disabled editing. Restore returned exact draft text with Unsaved indicator. |
+| Save and auto-save | Native Save wrote a DOCX and cleared `recovery.json`; subsequent edit became clean/Saved after idle, without invoking Save. |
+| Recent open/missing path | Saved file appeared once; picker reopened exact saved/auto-saved text. Temporarily renaming the disposable file showed a disabled Unavailable entry with an active Remove control. File was restored afterward. |
+| Warned-import recovery | Existing unsupported fixture displayed 15 warnings and protected-source banner. Editing left source SHA256 unchanged after idle; checkpoint contained all 15 warnings and protected source. SIGKILL/relaunch/Restore retained dirty text and protected-source banner. |
+| Explicit discard | Relaunch of the remaining warned-import checkpoint offered recovery; Discard recovery returned blank clean editor and Recovery discarded notice. |
+
+One initial batched Restore/Save interaction produced a CUA “app changed”/“App
+quit” error; cause remains unconfirmed. Repeating Restore as its own observed step
+succeeded for both untitled and warned-import documents. This does not certify the
+initial failure as an application defect or resolve it conclusively.
+
+Native resizing attempts did not change window geometry, so a **700×500 native
+window, twelve-row popup and bottom-edge popup were not manually verified**. The
+passing desktop UI integration test renders twelve entries at 700×500 and verifies
+scrolling plus keyboard reachability of all 24 controls. Task 7's deferred Minor
+finding remains: its 44pt minimum scroll height can exceed remaining space if the
+popup starts fewer than 44pt from the viewport bottom. The ordinary popup was
+visible and legible; that observation does not clear this edge case.
+
+Per-document caret restart, failed-save recovery retention, corrupt/future-state
+preservation and close-on-write-failure were verified by automated injected-store
+cases, not independently repeated through native dialogs in this smoke. Native
+Windows/Linux filesystem/UTF-16 paths, full screen-reader interaction and external
+Word/LibreOffice interoperability remain outstanding. This increment does not
+complete the full approved feature backlog.
+
 ## MCP integration — 2026-10-10
 
 The MCP pass adds 14 provider-independent tools in live-window and background

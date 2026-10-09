@@ -12,6 +12,12 @@ converted copy; their source and filesystem aliases cannot be overwritten.
 Tables, images, lists, headers/footers, reviewing, printing and proofing are deferred.
 An [MCP interface](docs/MCP.md) lets compatible AI clients read and edit the live
 document or use independent background sessions through 14 provider-neutral tools.
+Local workspace features include a compact Recent Documents picker, remembered
+caret positions, light/dark appearance and zoom. Named unprotected DOCX files
+save automatically after five idle seconds. Untitled documents and warned imports
+use local recovery checkpoints; startup offers explicit Restore or Discard,
+and restored content stays unsaved. Recovery preserves warning/source protection.
+
 See [feature boundaries](docs/FEATURES.md) and [actual acceptance results](docs/ACCEPTANCE.md).
 
 ## Apple Silicon local app
@@ -34,7 +40,7 @@ cargo fetch --locked
 Once prepared, the following checks and packaging run offline:
 
 ```sh
-cargo fmt --check
+cargo fmt --all -- --check
 cargo test --workspace --offline --locked
 cargo clippy --workspace --all-targets --offline --locked -- -D warnings
 sh scripts/package-macos.sh
@@ -50,6 +56,18 @@ Offline packaging requires the cached toolchain, target and dependencies.
 For a fresh authorized environment, [toolchain setup](docs/TOOLCHAIN.md) describes
 preparing them; offline mode cannot fill a missing cache.
 
+## Local workspace storage
+
+Folio keeps `workspace.json` and one `recovery.json` in the per-user application
+data directory: `~/Library/Application Support/Folio` on macOS,
+`%APPDATA%\Folio` on Windows, and `$XDG_DATA_HOME/folio` (absolute paths only)
+or `~/.local/share/folio` on Linux. These contain local document paths, preferences
+and recoverable document content. They do not provide sync, encryption, version
+history or multiple-window coordination. Invalid or unsupported state versions
+are retained and reported; resolve the reported file/directory issue before retrying.
+A crash can lose edits since the last completed two-second idle checkpoint.
+The full requested feature roadmap is still being delivered in increments.
+
 ## Cross-platform development
 
 Use the same exports on macOS/Linux. Run `cargo build -p folio-desktop --offline
@@ -63,9 +81,9 @@ CI results and native Windows/Linux GUI behavior remain separate from Mac result
 
 | Package | Responsibility | State |
 | --- | --- | --- |
-| `document-core` | Pure model, commands, selection, history and warnings | Implemented; 22 regression tests |
+| `document-core` | Pure model, commands, selection, history and warnings | Implemented; 22 unit + 5 recovery integration tests |
 | `folio-docx` | Bounded ZIP/XML DOCX subset conversion | Implemented; 23 codec tests |
-| `folio-desktop` | Native rich-text canvas, dialogs, MCP and atomic saves | Implemented; 36 regression tests and a manual layout benchmark |
+| `folio-desktop` | Native canvas, dialogs, MCP, atomic saves and local workspace | Implemented; 81 regression tests and one ignored manual layout benchmark |
 
 Keep mutations in shared core commands and filesystem operations in the app.
 `Cargo.lock` fixes transitive dependencies; normal builds use `--locked`.

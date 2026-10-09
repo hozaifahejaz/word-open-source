@@ -43,6 +43,9 @@ and build; published help scopes are recorded below without invented build numbe
 | Find/replace | Supported | Literal case-sensitive paragraph-local, cross-run search; advanced modes deferred | Design/edit; contracts |
 | Alignment/spacing | Supported | Four alignments; before/after and multiple/exact/at-least spacing; indent/tab stops deferred | Desktop/web; ECMA Part 1 |
 | Page settings/breaks | Supported | One size/orientation/margin set and explicit breaks; automatic/explicit pagination implemented | Desktop/web; ECMA Part 1 |
+| Local workspace | Supported | File-tab Recent Documents (12 unique paths), unavailable-entry removal, per-document caret, remembered light/dark appearance and zoom | [Acceptance evidence](ACCEPTANCE.md) |
+| Auto-save/recovery | Supported | Named unprotected DOCX files auto-save after five idle seconds; dirty recovery checkpoints after two seconds; explicit startup Restore/Discard retains import guards | [Acceptance evidence](ACCEPTANCE.md) |
+| Advanced workspace | Deferred | Tabs/windows, templates/gallery, duplication/rename, drag/drop, read-only/password protection, version history and comparison | Approved feature roadmap |
 | DOCX | Partial | Supported semantic subset import/export; inherited styles flattened; omissions/approximations warn | ECMA Parts 1–4; MS-DOCX |
 | Tables/images | Deferred | No model/rendering; imports must warn | Create document; ECMA Part 1 |
 | Styles/templates | Partial | Inherited named styles resolved on import and flattened; no named-style editor/templates | Web service; WordprocessingML |
@@ -66,7 +69,25 @@ and record supported elements, approximations and rejected features explicitly.
 Unknown imported content must warn rather than quietly disappear on save.
 Update statuses after implementation; planned work is not supported behavior.
 
-## 0.1.0 verification boundary
+## Workspace/recovery increment — 2026-10-10
+
+Local versioned state records preferences, recent paths and caret positions; it is
+not cloud sync or document version history. Recovery stores one dirty document
+snapshot, including selection, warnings and protected source. Restore is explicit
+and remains unsaved; successful save or explicit discard clears the snapshot.
+Failed disk operations preserve recovery and report an error. Invalid/future state
+is reported and preserved rather than silently replaced. Idle auto-save does not
+apply to untitled documents or protected warned imports; those require explicit
+Save/Save converted copy. Recovery cannot retain edits made after the last completed
+checkpoint, and concurrent Folio windows sharing this store are not supported.
+
+This delivers the first approved workspace increment. All other features in the
+[approved roadmap](superpowers/specs/2026-10-10-folio-feature-roadmap-design.md),
+including map integration, remain deferred unless explicitly supported above.
+The current verification evidence and outstanding native checks are recorded in
+[acceptance results](ACCEPTANCE.md).
+
+## Earlier 0.1.0 verification boundary
 
 The macOS 27.0 arm64 release bundle was exercised for text/Unicode paste,
 selection/formatting, automatic and explicit pages, undo/redo, literal replacement,

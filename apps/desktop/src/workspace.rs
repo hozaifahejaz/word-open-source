@@ -126,6 +126,25 @@ pub struct SavedCaret {
     pub path: StoredPath,
     pub position: Position,
 }
+pub struct RecentDocumentPresentation {
+    pub name: String,
+    pub location: String,
+    pub available: bool,
+}
+pub fn recent_document_presentation(path: &Path) -> RecentDocumentPresentation {
+    RecentDocumentPresentation {
+        name: path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string()),
+        location: path
+            .parent()
+            .map(|parent| parent.display().to_string())
+            .unwrap_or_default(),
+        available: path.is_file(),
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WorkspaceState {
     pub dark_mode: bool,
@@ -347,6 +366,37 @@ mod tests {
     }
     fn path(name: &str) -> StoredPath {
         StoredPath::from_path(Path::new(name)).unwrap()
+    }
+    #[test]
+    fn recent_presentation_uses_file_and_parent_names() {
+        let presentation = recent_document_presentation(Path::new("projects/drafts/Proposal.docx"));
+        assert_eq!(presentation.name, "Proposal.docx");
+        assert_eq!(presentation.location, "projects/drafts");
+    }
+    #[test]
+    fn recent_presentation_marks_missing_paths_unavailable() {
+        let dir = Directory::new();
+        let file = dir.0.join("Draft.docx");
+        assert!(!recent_document_presentation(&file).available);
+        fs::create_dir_all(&dir.0).unwrap();
+        fs::write(&file, []).unwrap();
+        assert!(recent_document_presentation(&file).available);
+    }
+    #[test]
+    fn recent_removal_preserves_other_entries_order() {
+        let mut state = WorkspaceState::default();
+        for name in ["first.docx", "second.docx", "third.docx"] {
+            state.record_recent(path(name), 1);
+        }
+        state.remove_recent(&path("second.docx"));
+        assert_eq!(
+            state
+                .recent
+                .iter()
+                .map(|recent| recent.path.clone())
+                .collect::<Vec<_>>(),
+            vec![path("third.docx"), path("first.docx")]
+        );
     }
     #[test]
     fn workspace_state_round_trips_preferences_and_recent_order() {

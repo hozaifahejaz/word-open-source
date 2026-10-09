@@ -8,7 +8,7 @@ mod workspace;
 use document_core::*;
 use editing::{Action, move_to};
 use egui::{Color32, Key, Rect, Stroke, Vec2};
-use icons::{Icon, IconButton};
+use icons::{Icon, IconButton, RecentDocumentButton};
 use layout::DocumentLayout;
 use std::{
     path::{Path, PathBuf},
@@ -68,6 +68,9 @@ struct FolioApp {
     last_recovery_document: Option<Document>,
     recovery_cleanup_pending: bool,
     workspace_state: WorkspaceState,
+    observed_workspace: WorkspaceState,
+    saved_workspace: WorkspaceState,
+    state_checkpoint: CheckpointDebounce,
     pending_recovery: Option<RecoverySnapshot>,
 }
 impl Default for FolioApp {
@@ -111,6 +114,9 @@ impl Default for FolioApp {
             last_recovery_document: None,
             recovery_cleanup_pending: false,
             workspace_state: WorkspaceState::default(),
+            observed_workspace: WorkspaceState::default(),
+            saved_workspace: WorkspaceState::default(),
+            state_checkpoint: CheckpointDebounce::default(),
             pending_recovery: None,
         }
     }
@@ -142,6 +148,8 @@ impl FolioApp {
         if !errors.is_empty() {
             app.error = Some(errors.join("\n\n"));
         }
+        app.observed_workspace = app.workspace_state.clone();
+        app.saved_workspace = app.workspace_state.clone();
         app.workspace_store = Some(store);
         app
     }
@@ -204,7 +212,7 @@ impl FolioApp {
         true
     }
     fn schedule_checkpoints(&mut self, now: Instant) {
-        self.capture_caret();
+        self.schedule_workspace(now);
         if self.observed_document != *self.editor.document() {
             self.observed_document = self.editor.document().clone();
             if self.editor.is_dirty() {
@@ -212,6 +220,37 @@ impl FolioApp {
                 self.autosave_checkpoint.mark_changed(now);
             }
         }
+    }
+    fn schedule_workspace(&mut self, now: Instant) {
+        self.capture_caret();
+        self.zoom = if self.zoom.is_finite() {
+            self.zoom.clamp(0.25, 2.5)
+        } else {
+            1.0
+        };
+        self.workspace_state.dark_mode = self.dark_mode;
+        self.workspace_state.zoom = self.zoom;
+        if self.workspace_state != self.observed_workspace {
+            self.observed_workspace = self.workspace_state.clone();
+            self.state_checkpoint.mark_changed(now);
+        }
+    }
+    fn flush_workspace(&mut self) -> bool {
+        self.schedule_workspace(Instant::now());
+        self.state_checkpoint.clear();
+        if self.workspace_state == self.saved_workspace {
+            return true;
+        }
+        if let Some(store) = &self.workspace_store {
+            if let Err(error) = store.save_state(&self.workspace_state) {
+                self.error = Some(format!(
+                    "Could not save workspace preferences: {error}. Check the application data directory and try again."
+                ));
+                return false;
+            }
+        }
+        self.saved_workspace = self.workspace_state.clone();
+        true
     }
     fn recovery_snapshot(&self) -> Result<RecoverySnapshot, workspace::StoreError> {
         Ok(RecoverySnapshot {
@@ -359,7 +398,6 @@ impl FolioApp {
             .as_secs();
         self.workspace_state.record_recent(stored, timestamp);
     }
-    #[allow(dead_code)] // Used by the Recent Documents UI in the next plan task.
     fn request_open_path(&mut self, path: PathBuf, ctx: &egui::Context) {
         if let Err(error) = self.ensure_recovery_resolved() {
             self.error = Some(error);
@@ -444,6 +482,12 @@ impl FolioApp {
         if self.allow_close {
             return;
         }
+        if self
+            .state_checkpoint
+            .is_due(now, Duration::from_millis(500))
+        {
+            self.flush_workspace();
+        }
         if self.recovery_checkpoint.is_due(now, Duration::from_secs(2)) {
             self.flush_recovery();
             ctx.request_repaint();
@@ -468,6 +512,10 @@ impl FolioApp {
                 let save_at = changed + Duration::from_secs(5);
                 deadline = Some(deadline.map_or(save_at, |recovery| recovery.min(save_at)));
             }
+        }
+        if let Some(changed) = self.state_checkpoint.changed_at {
+            let state_at = changed + Duration::from_millis(500);
+            deadline = Some(deadline.map_or(state_at, |other| other.min(state_at)));
         }
         if let Some(deadline) = deadline {
             ctx.request_repaint_after(deadline.saturating_duration_since(now));
@@ -710,7 +758,9 @@ impl FolioApp {
         }
         self.pending = None;
         if matches!(pending, Pending::Quit) {
-            self.capture_caret();
+            if !self.flush_workspace() {
+                return;
+            }
             self.allow_close = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         } else {
@@ -752,6 +802,9 @@ impl FolioApp {
                     return;
                 }
                 if !self.flush_recovery() {
+                    return;
+                }
+                if !self.flush_workspace() {
                     return;
                 }
                 self.allow_close = true;
@@ -1075,6 +1128,58 @@ impl FolioApp {
                 );
             });
     }
+    fn recent_documents_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        ui.add_space(6.0);
+        ui.menu_button("Recent Documents", |ui| {
+            ui.set_max_width(360.0);
+            if self.workspace_state.recent.is_empty() {
+                ui.colored_label(
+                    theme::muted(self.dark_mode),
+                    "Your opened documents will appear here.",
+                );
+            }
+            for recent in self.workspace_state.recent.clone() {
+                let Ok(path) = recent.path.to_path() else {
+                    continue;
+                };
+                let presentation = workspace::recent_document_presentation(&path);
+                ui.push_id(&path, |ui| {
+                    ui.horizontal(|ui| {
+                        let location = if presentation.available {
+                            presentation.location.clone()
+                        } else {
+                            format!("Unavailable • {}", presentation.location)
+                        };
+                        let width = (ui.available_width() - 36.0).clamp(60.0, 300.0);
+                        if ui
+                            .add_enabled(
+                                presentation.available,
+                                RecentDocumentButton {
+                                    name: &presentation.name,
+                                    location: &location,
+                                    width,
+                                },
+                            )
+                            .on_hover_text(path.display().to_string())
+                            .clicked()
+                        {
+                            ui.close();
+                            self.request_open_path(path.clone(), ctx);
+                        }
+                        if ui
+                            .add(
+                                IconButton::new(Icon::Close, "Remove from recent documents")
+                                    .compact(),
+                            )
+                            .clicked()
+                        {
+                            self.workspace_state.remove_recent(&recent.path);
+                        }
+                    });
+                });
+            }
+        });
+    }
     fn ribbon(&mut self, ctx: &egui::Context) {
         let frame = egui::Frame::new()
             .fill(theme::surface(self.dark_mode))
@@ -1158,7 +1263,7 @@ impl FolioApp {
             ui.separator();
             match self.tab {
                 Tab::File => {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         for (label, action) in [
                             ("New document", Action::New),
                             ("Open DOCX…", Action::Open),
@@ -1174,6 +1279,7 @@ impl FolioApp {
                         }
                     });
                     ui.label("DOCX • A warned import always saves as a converted copy.");
+                    self.recent_documents_ui(ui, ctx);
                 }
                 Tab::Home => {
                     ui.horizontal_wrapped(|ui| {
@@ -2185,6 +2291,9 @@ impl eframe::App for FolioApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             if self.pending_recovery.is_some() {
                 // Closing the launch prompt preserves the snapshot for the next launch.
+                if !self.flush_workspace() {
+                    return;
+                }
                 self.allow_close = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             } else {
@@ -2351,6 +2460,104 @@ mod app_tests {
         std::fs::create_dir_all(&dir.0).unwrap();
         files::save(&Document::default(), &path, None).unwrap();
         path
+    }
+    #[test]
+    fn preferences_and_caret_share_debounce_and_survive_restart() {
+        let dir = RecoveryDirectory::new();
+        let path = lifecycle_file(&dir, "preferences.docx");
+        let mut app = dir.app();
+        app.open_path(&path).unwrap();
+        let start = Instant::now();
+        app.dark_mode = true;
+        app.zoom = 20.0;
+        app.schedule_checkpoints(start);
+        app.process_checkpoints(
+            start + Duration::from_millis(499),
+            &egui::Context::default(),
+        );
+        assert!(
+            app.workspace_store
+                .as_ref()
+                .unwrap()
+                .load_state()
+                .unwrap()
+                .is_none()
+        );
+        app.zoom = 1.5;
+        app.insert("hello".into());
+        app.schedule_checkpoints(start + Duration::from_millis(300));
+        app.process_checkpoints(
+            start + Duration::from_millis(799),
+            &egui::Context::default(),
+        );
+        assert!(
+            app.workspace_store
+                .as_ref()
+                .unwrap()
+                .load_state()
+                .unwrap()
+                .is_none()
+        );
+        app.process_checkpoints(
+            start + Duration::from_millis(800),
+            &egui::Context::default(),
+        );
+        let restored = FolioApp::with_workspace_store(WorkspaceStore::at(dir.0.clone()));
+        assert!(restored.dark_mode);
+        assert_eq!(restored.zoom, 1.5);
+        assert_eq!(
+            restored
+                .workspace_state
+                .caret_for(&StoredPath::from_path(&path).unwrap()),
+            Some(Position::new(0, 5))
+        );
+        assert!(app.state_checkpoint.changed_at.is_none());
+    }
+    #[test]
+    fn confirmed_close_flushes_preferences_and_failed_write_keeps_window_open() {
+        let dir = RecoveryDirectory::new();
+        let mut app = dir.app();
+        app.zoom = 10.0;
+        app.perform(Pending::Quit, &egui::Context::default());
+        assert!(app.allow_close);
+        assert_eq!(
+            app.workspace_store
+                .as_ref()
+                .unwrap()
+                .load_state()
+                .unwrap()
+                .unwrap()
+                .zoom,
+            2.5
+        );
+        let blocked = RecoveryDirectory::new();
+        std::fs::write(&blocked.0, "not a directory").unwrap();
+        let mut app = blocked.app();
+        app.dark_mode = true;
+        app.perform(Pending::Quit, &egui::Context::default());
+        assert!(!app.allow_close);
+        assert!(
+            app.error
+                .as_deref()
+                .unwrap()
+                .contains("Could not save workspace")
+        );
+        assert_ne!(app.saved_workspace, app.workspace_state);
+    }
+    #[test]
+    fn unchanged_workspace_does_not_create_state_and_corrupt_state_is_preserved() {
+        let dir = RecoveryDirectory::new();
+        let mut app = dir.app();
+        assert!(app.flush_workspace());
+        assert!(!dir.0.exists());
+        std::fs::create_dir_all(&dir.0).unwrap();
+        std::fs::write(dir.0.join("workspace.json"), "broken").unwrap();
+        app.dark_mode = true;
+        assert!(!app.flush_workspace());
+        assert_eq!(
+            std::fs::read_to_string(dir.0.join("workspace.json")).unwrap(),
+            "broken"
+        );
     }
     #[test]
     fn successful_open_adds_recent_but_cancelled_dialog_does_not() {

@@ -7,6 +7,7 @@ use egui::{
 
 #[derive(Clone, Copy)]
 pub enum Icon {
+    Recent,
     New,
     Open,
     Save,
@@ -85,6 +86,11 @@ impl Icon {
             painter.circle_stroke(point(x, y), r * rect.width() / 24.0, stroke);
         };
         match self {
+            Self::Recent => {
+                circle(12., 12., 9.);
+                line((12., 6.), (12., 12.));
+                line((12., 12.), (16., 14.));
+            }
             Self::New => {
                 path(&[
                     (14., 3.),
@@ -433,5 +439,73 @@ impl Widget for IconButton<'_> {
             );
         }
         response.on_hover_text(self.label)
+    }
+}
+
+/// A bounded recent-document row with a readable filename/location hierarchy.
+pub struct RecentDocumentButton<'a> {
+    pub name: &'a str,
+    pub location: &'a str,
+    pub width: f32,
+}
+impl Widget for RecentDocumentButton<'_> {
+    fn ui(self, ui: &mut Ui) -> Response {
+        let (rect, response) =
+            ui.allocate_exact_size(Vec2::new(self.width.max(60.0), 44.0), Sense::click());
+        response.widget_info(|| {
+            WidgetInfo::labeled(
+                WidgetType::Button,
+                ui.is_enabled(),
+                format!("{} — {}", self.name, self.location),
+            )
+        });
+        if ui.is_rect_visible(rect) {
+            let visuals = ui.style().interact(&response);
+            ui.painter().rect(
+                rect,
+                visuals.corner_radius,
+                visuals.weak_bg_fill,
+                visuals.bg_stroke,
+                egui::StrokeKind::Inside,
+            );
+            if response.has_focus() {
+                ui.painter().rect_stroke(
+                    rect.expand(1.0),
+                    visuals.corner_radius,
+                    Stroke::new(1.0, crate::theme::ACCENT),
+                    egui::StrokeKind::Outside,
+                );
+            }
+            Icon::Recent.paint(
+                ui.painter(),
+                Rect::from_min_size(rect.min + Vec2::new(8., 14.), Vec2::splat(16.)),
+                visuals.fg_stroke.color,
+            );
+            for (text, size, y, color) in [
+                (self.name, 13.0, 6.0, visuals.fg_stroke.color),
+                (
+                    self.location,
+                    11.0,
+                    24.0,
+                    if ui.is_enabled() {
+                        ui.visuals().weak_text_color()
+                    } else {
+                        visuals.fg_stroke.color
+                    },
+                ),
+            ] {
+                let mut job = egui::text::LayoutJob::simple(
+                    text.to_owned(),
+                    egui::FontId::proportional(size),
+                    color,
+                    (rect.width() - 42.0).max(1.0),
+                );
+                job.wrap.max_rows = 1;
+                let galley = ui.painter().layout_job(job);
+                ui.painter()
+                    .galley(rect.min + Vec2::new(34., y), galley, color);
+            }
+        }
+        response
     }
 }

@@ -59,6 +59,7 @@ pub struct Editor {
     document: Document,
     selection: Selection,
     saved: Document,
+    recovered_dirty: bool,
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
     history_limit: usize,
@@ -79,6 +80,7 @@ impl Editor {
         document.normalize();
         Ok(Self {
             saved: document.clone(),
+            recovered_dirty: false,
             document,
             selection: Selection::default(),
             undo: Vec::new(),
@@ -93,10 +95,11 @@ impl Editor {
         self.selection
     }
     pub fn is_dirty(&self) -> bool {
-        self.document != self.saved
+        self.recovered_dirty || self.document != self.saved
     }
     pub fn mark_saved(&mut self) {
         self.saved = self.document.clone();
+        self.recovered_dirty = false;
     }
     pub fn set_selection(&mut self, selection: Selection) -> Result<(), CoreError> {
         self.document.validate_selection(selection)?;
@@ -108,6 +111,24 @@ impl Editor {
         let mut loaded = Self::new(document)?;
         loaded.history_limit = self.history_limit;
         *self = loaded;
+        Ok(())
+    }
+    /// Restore recovered content without history, keeping it dirty until saved.
+    /// Invalid selections fall back to the start of the normalized document.
+    pub fn load_recovered_document(
+        &mut self,
+        document: Document,
+        selection: Selection,
+    ) -> Result<(), CoreError> {
+        let mut recovered = Self::new(document)?;
+        recovered.selection = if recovered.document.validate_selection(selection).is_ok() {
+            selection
+        } else {
+            Selection::caret(Position::new(0, 0))
+        };
+        recovered.recovered_dirty = true;
+        recovered.history_limit = self.history_limit;
+        *self = recovered;
         Ok(())
     }
     /// Bound snapshot history. Zero disables undo storage.

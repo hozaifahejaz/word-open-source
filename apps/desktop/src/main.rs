@@ -211,12 +211,22 @@ impl FolioApp {
         true
     }
     fn discard_startup_recovery(&mut self) -> bool {
+        let resume_checkpoints = self.unreadable_recovery && self.editor.is_dirty();
         if !self.remove_recovery() {
             return false;
         }
         self.pending_recovery = None;
         self.unreadable_recovery = false;
         self.reset_recovery_tracking();
+        if resume_checkpoints {
+            // Edits made while the old journal was unreadable still need protection,
+            // even when the user makes no further edit after discarding that journal.
+            let now = Instant::now();
+            self.recovery_checkpoint.mark_changed(now);
+            if self.path.is_some() && self.protected.is_none() {
+                self.autosave_checkpoint.mark_changed(now);
+            }
+        }
         self.focus_canvas = true;
         self.notice = "Recovery discarded".into();
         true
@@ -3093,6 +3103,69 @@ mod app_tests {
                     .document,
                 *app.editor.document()
             );
+        }
+    }
+    #[test]
+    fn unreadable_recovery_discard_rearms_dirty_content_without_another_edit() {
+        for mode in ["untitled", "named", "protected"] {
+            let dir = RecoveryDirectory::new();
+            let target = lifecycle_file(&dir, "current.docx");
+            std::fs::write(dir.0.join("recovery.json"), unreadable_recovery_bytes()[0]).unwrap();
+            let mut app = FolioApp::with_workspace_store(WorkspaceStore::at(dir.0.clone()));
+            app.error = None;
+            if mode != "untitled" {
+                app.open_path(&target).unwrap();
+            }
+            if mode == "protected" {
+                app.protected = Some(target.clone());
+            }
+            app.insert("keep these existing edits".into());
+            let current = app.editor.document().clone();
+            let ctx = egui::Context::default();
+            let edited_at = Instant::now();
+            app.schedule_checkpoints(edited_at);
+            app.process_checkpoints(edited_at + Duration::from_secs(2), &ctx);
+            assert!(app.error.as_ref().unwrap().contains("checkpoint recovery"));
+            assert!(app.discard_startup_recovery());
+            app.error = None;
+            // No further edit: the successful discard itself must schedule the current draft.
+            let recovery_at = app
+                .recovery_checkpoint
+                .changed_at
+                .expect("dirty recovery must be rearmed");
+            assert_eq!(
+                app.autosave_checkpoint.changed_at.is_some(),
+                mode == "named"
+            );
+            app.schedule_checkpoints(recovery_at);
+            app.process_checkpoints(recovery_at + Duration::from_secs(2), &ctx);
+            assert_eq!(
+                app.workspace_store
+                    .as_ref()
+                    .unwrap()
+                    .load_recovery()
+                    .unwrap()
+                    .unwrap()
+                    .document,
+                current
+            );
+            app.process_checkpoints(recovery_at + Duration::from_secs(5), &ctx);
+            assert!(app.error.is_none());
+            if mode == "named" {
+                assert!(!app.editor.is_dirty());
+                assert_eq!(files::open(&target).unwrap().document, current);
+                assert!(
+                    app.workspace_store
+                        .as_ref()
+                        .unwrap()
+                        .load_recovery()
+                        .unwrap()
+                        .is_none()
+                );
+            } else {
+                assert!(app.editor.is_dirty());
+                assert_eq!(files::open(&target).unwrap().document, Document::default());
+            }
         }
     }
     #[test]

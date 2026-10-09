@@ -33,6 +33,9 @@ pub enum Command {
     InsertPageBreak {
         at: Position,
     },
+    ReplaceWithPageBreak {
+        selection: Selection,
+    },
     SetPageLayout {
         layout: PageLayout,
     },
@@ -210,23 +213,10 @@ fn apply_command(
                 None,
             )?
         }
-        Command::InsertPageBreak { at } => {
-            doc.validate_position(at)?;
-            let original = doc.paragraph(at.block)?.clone();
-            let mut left = original.clone();
-            let mut right = original.clone();
-            left.runs = slice_runs(&original, 0, at.offset);
-            right.runs = slice_runs(&original, at.offset, original.len_bytes());
-            right.default_style = style_at(&original, at.offset);
-            doc.blocks.splice(
-                at.block..=at.block,
-                [
-                    Block::Paragraph(left),
-                    Block::PageBreak,
-                    Block::Paragraph(right),
-                ],
-            );
-            Selection::caret(Position::new(at.block + 2, 0))
+        Command::InsertPageBreak { at } => insert_page_break(doc, at)?,
+        Command::ReplaceWithPageBreak { selection } => {
+            let caret = replace(doc, selection, "", None)?;
+            insert_page_break(doc, caret.focus)?
         }
         Command::FormatRuns { selection, patch } => {
             doc.validate_selection(selection)?;
@@ -298,6 +288,25 @@ fn apply_command(
         Command::Undo | Command::Redo => unreachable!("handled by Editor"),
     };
     Ok((selection, replacements))
+}
+
+fn insert_page_break(doc: &mut Document, at: Position) -> Result<Selection, CoreError> {
+    doc.validate_position(at)?;
+    let original = doc.paragraph(at.block)?.clone();
+    let mut left = original.clone();
+    let mut right = original.clone();
+    left.runs = slice_runs(&original, 0, at.offset);
+    right.runs = slice_runs(&original, at.offset, original.len_bytes());
+    right.default_style = style_at(&original, at.offset);
+    doc.blocks.splice(
+        at.block..=at.block,
+        [
+            Block::Paragraph(left),
+            Block::PageBreak,
+            Block::Paragraph(right),
+        ],
+    );
+    Ok(Selection::caret(Position::new(at.block + 2, 0)))
 }
 
 /// Slice by offsets in the concatenated text, retaining each run's style.

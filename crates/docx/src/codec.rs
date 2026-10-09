@@ -258,9 +258,10 @@ fn paragraph(
         }
         inline(c, styles, &run_base, &mut pieces, d)?;
     }
-    // A paragraph containing only page breaks is the canonical package encoding
-    // of structural break blocks; ordinary empty paragraphs remain paragraphs.
-    if !pieces.is_empty() && pieces.iter().all(Option::is_none) {
+    // Only an unformatted break-only paragraph is the canonical encoding of a
+    // structural break. Keep styled empty paragraphs on either side of a break
+    // so spacing and paragraph-mark formatting survive conversion.
+    if !pieces.is_empty() && pieces.iter().all(Option::is_none) && p == Paragraph::default() {
         blocks.extend(pieces.into_iter().map(|_| Block::PageBreak));
         return Ok(());
     }

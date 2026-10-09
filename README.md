@@ -61,9 +61,9 @@ CI results and native Windows/Linux GUI behavior remain separate from Mac result
 
 | Package | Responsibility | State |
 | --- | --- | --- |
-| `document-core` | Pure model, commands, selection, history and warnings | Implemented; 20 regression tests |
-| `folio-docx` | Bounded ZIP/XML DOCX subset conversion | Implemented; 21 codec tests |
-| `folio-desktop` | Native rich-text canvas, dialogs and atomic saves | Implemented; 15 app tests |
+| `document-core` | Pure model, commands, selection, history and warnings | Implemented; 22 regression tests |
+| `folio-docx` | Bounded ZIP/XML DOCX subset conversion | Implemented; 23 codec tests |
+| `folio-desktop` | Native rich-text canvas, dialogs and atomic saves | Implemented; 18 app tests and a manual layout benchmark |
 
 Keep mutations in shared core commands and filesystem operations in the app.
 `Cargo.lock` fixes transitive dependencies; normal builds use `--locked`.

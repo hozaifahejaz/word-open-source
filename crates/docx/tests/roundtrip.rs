@@ -39,6 +39,47 @@ fn roundtrip(doc: &Document) -> ImportReport {
     assert_eq!(expected, result.document);
     result
 }
+
+#[test]
+fn named_style_paragraph_mark_loss_requires_a_converted_copy() {
+    let doc = format!(
+        r#"<w:document xmlns:w="{W}"><w:body><w:p><w:pPr><w:pStyle w:val="Derived"/></w:pPr></w:p></w:body></w:document>"#
+    );
+    let styles = format!(
+        r#"<w:styles xmlns:w="{W}"><w:style w:type="paragraph" w:styleId="Base"><w:pPr><w:rPr><w:b/></w:rPr></w:pPr></w:style><w:style w:type="paragraph" w:styleId="Derived"><w:basedOn w:val="Base"/></w:style></w:styles>"#
+    );
+    let mut pkg = parts(&doc);
+    pkg.extend([
+        ("word/_rels/document.xml.rels", STYLE_REL.as_bytes()),
+        ("word/styles.xml", styles.as_bytes()),
+    ]);
+    let report = import_docx(Cursor::new(zip(&pkg))).unwrap();
+    assert!(report.warnings.iter().any(|w| w.feature == Feature::Styles));
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.location.as_deref() == Some("word/styles.xml"))
+    );
+}
+
+#[test]
+fn styled_break_only_paragraph_preserves_spacing_and_typing_style() {
+    let doc = format!(
+        r#"<w:document xmlns:w="{W}"><w:body><w:p><w:pPr><w:spacing w:before="240" w:after="120"/><w:rPr><w:b/></w:rPr></w:pPr><w:r><w:br w:type="page"/></w:r></w:p></w:body></w:document>"#
+    );
+    let report = import(&doc);
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    assert_eq!(report.document.blocks.len(), 3);
+    for block in [0, 2] {
+        let p = report.document.paragraph(block).unwrap();
+        assert_eq!(p.style.space_before_twips, 240);
+        assert_eq!(p.style.space_after_twips, 120);
+        assert!(p.default_style.bold);
+    }
+    assert!(matches!(report.document.blocks[1], Block::PageBreak));
+    roundtrip(&report.document);
+}
 #[test]
 fn authored_fixture_unicode_styles_page_and_breaks() {
     let report = import(include_str!("fixtures/styled.xml"));

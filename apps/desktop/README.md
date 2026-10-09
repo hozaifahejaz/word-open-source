@@ -2,6 +2,8 @@
 
 Native Rust egui/eframe editor with Folio branding, File/Home/Layout/View ribbon,
 quick-access actions, editable paginated paper, and page/word/zoom status.
+The light theme groups text and paragraph tools, highlights Save, and wraps
+controls in narrow windows. Import warnings include a direct converted-copy action.
 The document canvas is a custom rich-text widget, not a plain-text widget plus
 preview. Every paragraph is shaped once into styled egui glyph rows. The composed
 layout supplies painting, grapheme caret stops, pointer hits, selection rectangles,
@@ -16,14 +18,18 @@ caret affinity at wrapped lines and page boundaries.
 - Bold, italic, underline, Sans/Serif, size and color work on a selection or pending
   typing style. Paragraph alignment, spacing and line spacing update the model.
 - Paper, orientation, four margins, zoom and fit width update the editable canvas.
-- Undo/redo restore model content and selection. Each core command is a history
-  step; replacing a selection with a page break currently uses two steps.
+- Undo/redo restore model content and selection. Replacing a selection with a
+  page break is one atomic history step.
 - Clipboard uses native egui/eframe copy/cut/paste. IME preedit is transient and
   displayed at the caret; commit replaces the selection as one undoable edit.
 - Find/replace is literal and case-sensitive; matches do not cross paragraphs.
   Command/Ctrl-F focuses a stable search field without changing the document
   selection. Search/replacement input never routes into the canvas. Numeric ribbon
   fields retain text focus, and typed values apply at commit rather than per digit.
+
+Grapheme caret boundaries are computed in one pass per changed paragraph.
+For the manual cold-layout benchmark, run
+`cargo test -p folio-desktop --offline --locked unicode_cold_layout_benchmark -- --ignored --nocapture`.
 
 Command on macOS, Ctrl on Windows/Linux: N New, O Open, S Save, Shift-S Save As,
 Z Undo, Shift-Z/Y Redo, B/I/U formatting, A Select All, F/H Find/Replace,

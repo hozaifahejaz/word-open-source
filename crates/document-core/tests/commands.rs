@@ -29,6 +29,50 @@ fn insert(e: &mut Editor, pos: Position, s: &str) -> EditOutcome {
 }
 
 #[test]
+fn page_break_replacement_rejects_invalid_range_atomically() {
+    let mut e = editor(&["e\u{301} text"]);
+    let original = e.document().clone();
+    let selection = e.selection();
+    assert_eq!(
+        e.execute(Command::ReplaceWithPageBreak {
+            selection: range((0, 1), (0, 3))
+        }),
+        Err(CoreError::InvalidPosition)
+    );
+    assert_eq!(e.document(), &original);
+    assert_eq!(e.selection(), selection);
+    assert!(!e.can_undo());
+    assert!(!e.is_dirty());
+}
+
+#[test]
+fn page_break_replacement_keeps_surviving_styles_and_undo_selection() {
+    let mut e = editor(&["left", "right"]);
+    e.execute(Command::FormatRuns {
+        selection: range((1, 0), (1, 5)),
+        patch: StylePatch {
+            italic: Some(true),
+            ..Default::default()
+        },
+    })
+    .unwrap();
+    e.mark_saved();
+    let original = e.document().clone();
+    let selection = range((1, 2), (0, 2));
+    e.set_selection(selection).unwrap();
+    e.execute(Command::ReplaceWithPageBreak { selection })
+        .unwrap();
+    assert_eq!(text(&e, 0), "le");
+    assert_eq!(text(&e, 2), "ght");
+    assert!(e.document().paragraph(2).unwrap().runs[0].style.italic);
+    assert_eq!(e.selection(), Selection::caret(at(2, 0)));
+    e.execute(Command::Undo).unwrap();
+    assert_eq!(e.document(), &original);
+    assert_eq!(e.selection(), selection);
+    assert!(!e.is_dirty());
+}
+
+#[test]
 fn cross_run_replacement_preserves_surviving_styles() {
     let bold = TextStyle {
         bold: true,

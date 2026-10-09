@@ -13,3 +13,4 @@ folio-docx.workspace = true
 egui.workspace = true
 eframe.workspace = true
 rfd.workspace = true
+unicode-segmentation.workspace = true

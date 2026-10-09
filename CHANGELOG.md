@@ -2,6 +2,18 @@
 
 Project author: hozaifahejaz.
 
+## Unreleased
+
+- Report omitted paragraph-mark formatting in named DOCX styles so imported
+  sources require a protected converted copy.
+- Preserve spacing and typing styles around imported break-only paragraphs.
+- Replace a selection with a page break as one atomic, undoable core command.
+- Compute Unicode grapheme caret boundaries in one pass. The manual debug
+  benchmark for 4,000 accented characters improved from 1.64 s to 9.6 ms locally.
+- Polish the desktop light theme with grouped tools, a prominent Save action,
+  wrapping controls, clearer document status and a converted-copy warning action.
+- Add regression coverage and a manually runnable Unicode layout benchmark.
+
 ## 0.1.0 — desktop foundation (2026-10-09)
 
 - Integrated a pure document model, grapheme-safe editing, formatting, bounded

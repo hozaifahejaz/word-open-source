@@ -6,6 +6,7 @@ use egui::{
     text::{LayoutJob, TextFormat},
 };
 use std::sync::Arc;
+use unicode_segmentation::UnicodeSegmentation;
 
 pub fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
@@ -171,16 +172,9 @@ impl DocumentLayout {
                     cache.clear();
                 }
                 let boundaries: Arc<std::collections::HashSet<usize>> = Arc::new(
-                    char_bytes
-                        .iter()
-                        .copied()
-                        .filter(|&b| {
-                            b == 0
-                                || b == text.len()
-                                || (text.as_bytes()[b - 1].is_ascii()
-                                    && text.as_bytes()[b].is_ascii())
-                                || p.is_boundary(b)
-                        })
+                    text.grapheme_indices(true)
+                        .map(|(offset, _)| offset)
+                        .chain(std::iter::once(text.len()))
                         .collect(),
                 );
                 cache.insert(text.clone(), boundaries.clone());
@@ -371,6 +365,55 @@ impl DocumentLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn caret_stops_do_not_split_graphemes_across_styled_runs() {
+        let doc = Document {
+            blocks: vec![Block::Paragraph(Paragraph {
+                runs: vec![
+                    Run::new("e", TextStyle::default()),
+                    Run::new(
+                        "\u{301}👩‍💻é",
+                        TextStyle {
+                            bold: true,
+                            ..Default::default()
+                        },
+                    ),
+                ],
+                ..Default::default()
+            })],
+            ..Default::default()
+        };
+        with_layout(&doc, 1.0, |l| {
+            let offsets: Vec<_> = l
+                .lines
+                .iter()
+                .flat_map(|line| line.stops.iter().map(|s| s.at.offset))
+                .collect();
+            assert_eq!(offsets, vec![0, 3, 14, 16]);
+        });
+    }
+
+    #[test]
+    #[ignore = "manual cold-layout benchmark; run with --ignored --nocapture"]
+    fn unicode_cold_layout_benchmark() {
+        for n in [1000, 2000, 4000] {
+            let doc = Document {
+                blocks: vec![Block::Paragraph(Paragraph::plain("é".repeat(n)))],
+                ..Default::default()
+            };
+            let ctx = egui::Context::default();
+            install_fonts(&ctx);
+            ctx.begin_pass(Default::default());
+            let start = std::time::Instant::now();
+            let layout = DocumentLayout::build(&ctx, &doc, 1.0);
+            println!("Unicode cold layout {n} chars: {:?}", start.elapsed());
+            assert_eq!(
+                layout.lines.last().unwrap().stops.last().unwrap().at.offset,
+                n * 2
+            );
+            let _ = ctx.end_pass();
+        }
+    }
     fn with_layout(doc: &Document, zoom: f32, check: impl FnOnce(DocumentLayout)) {
         let ctx = egui::Context::default();
         install_fonts(&ctx);

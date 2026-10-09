@@ -69,6 +69,7 @@ caret at the first paragraph. `document()` is read-only; mutations use
 | `FormatRuns { selection, patch }` | Apply Some fields of `StylePatch` to selected text; collapsed selection is a no-op |
 | `FormatParagraphs { selection, patch }` | Apply `ParagraphPatch` to intersected paragraphs; exclude an end paragraph at offset zero unless collapsed |
 | `InsertPageBreak { at }` | Produce left paragraph, structural break, right paragraph |
+| `ReplaceWithPageBreak { selection }` | Replace the range with a structural break in one transaction |
 | `SetPageLayout { layout }` | Change document-wide settings |
 | `ReplaceAll { needle, replacement }` | Replace original literal matches atomically, in one history step |
 | `Undo` / `Redo` | Restore content and recorded selection together |

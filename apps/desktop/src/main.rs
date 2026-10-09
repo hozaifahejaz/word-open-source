@@ -1,6 +1,7 @@
 mod editing;
 mod files;
 mod layout;
+mod theme;
 use document_core::*;
 use editing::{Action, move_to};
 use egui::{Color32, Key, Rect, Stroke, Vec2};
@@ -80,7 +81,10 @@ impl FolioApp {
     fn execute(&mut self, command: Command) {
         self.visual_line = None;
         match self.editor.execute(command) {
-            Ok(_) => {
+            Ok(outcome) => {
+                if outcome.changed {
+                    self.notice.clear();
+                }
                 self.reveal = true;
                 self.preferred_x = None;
             }
@@ -324,13 +328,8 @@ impl FolioApp {
                 ctx.memory_mut(|m| m.request_focus(egui::Id::new("find-input")));
             }
             Action::PageBreak => {
-                if !self.editor.selection().is_collapsed() {
-                    self.execute(Command::Delete {
-                        selection: self.editor.selection(),
-                    });
-                }
-                self.execute(Command::InsertPageBreak {
-                    at: self.editor.selection().focus,
+                self.execute(Command::ReplaceWithPageBreak {
+                    selection: self.editor.selection(),
                 });
                 self.focus_canvas = true;
             }
@@ -381,15 +380,19 @@ impl FolioApp {
         }
     }
     fn ribbon(&mut self, ctx: &egui::Context) {
-        egui::TopBottomPanel::top("ribbon").show(ctx, |ui| {
+        let frame = egui::Frame::new()
+            .fill(Color32::WHITE)
+            .inner_margin(egui::Margin::symmetric(16, 12));
+        let panel = egui::TopBottomPanel::top("ribbon").frame(frame);
+        panel.show(ctx, |ui| {
             if self.pending.is_some() || self.overwrite.is_some() || self.error.is_some() {
                 ui.disable();
             }
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label(
                     egui::RichText::new("FOLIO")
                         .strong()
-                        .color(Color32::from_rgb(25, 98, 91))
+                        .color(theme::ACCENT)
                         .size(22.0),
                 );
                 ui.separator();
@@ -400,9 +403,30 @@ impl FolioApp {
                     ("Undo", Action::Undo, self.editor.can_undo()),
                     ("Redo", Action::Redo, self.editor.can_redo()),
                 ] {
+                    if action == Action::Undo {
+                        ui.separator();
+                    }
+                    let button = if action == Action::Save {
+                        theme::primary_button(label)
+                    } else {
+                        egui::Button::new(label)
+                    };
+                    let command = if cfg!(target_os = "macos") {
+                        "⌘"
+                    } else {
+                        "Ctrl+"
+                    };
+                    let key = match action {
+                        Action::New => "N",
+                        Action::Open => "O",
+                        Action::Save => "S",
+                        Action::Undo => "Z",
+                        Action::Redo => "Shift+Z",
+                        _ => "",
+                    };
                     if ui
-                        .add_enabled(enabled, egui::Button::new(label))
-                        .on_hover_text(format!("{label} document"))
+                        .add_enabled(enabled, button)
+                        .on_hover_text(format!("{label} ({command}{key})"))
                         .clicked()
                     {
                         self.action(action, ctx);
@@ -415,11 +439,12 @@ impl FolioApp {
                     .and_then(|p| p.file_name())
                     .map(|s| s.to_string_lossy().to_string())
                     .unwrap_or("Untitled".into());
-                ui.label(format!(
-                    "{name}{}",
-                    if self.editor.is_dirty() { " •" } else { "" }
-                ));
+                ui.add(egui::Label::new(egui::RichText::new(name).strong()).truncate());
+                if self.editor.is_dirty() {
+                    ui.colored_label(theme::ACCENT, "Edited");
+                }
             });
+            ui.add_space(4.0);
             ui.horizontal(|ui| {
                 for (label, tab) in [
                     ("File", Tab::File),
@@ -451,6 +476,7 @@ impl FolioApp {
                 }
                 Tab::Home => {
                     ui.horizontal_wrapped(|ui| {
+                        ui.label(egui::RichText::new("Text").small().color(theme::MUTED));
                         let style = self.current_style();
                         for (label, selected, action) in [
                             ("Bold", style.bold, Action::Bold),
@@ -507,6 +533,7 @@ impl FolioApp {
                             });
                         }
                         ui.separator();
+                        ui.label(egui::RichText::new("Paragraph").small().color(theme::MUTED));
                         let alignment = self
                             .editor
                             .document()
@@ -544,7 +571,7 @@ impl FolioApp {
                             }
                         }
                     });
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         let p = self
                             .editor
                             .document()
@@ -997,11 +1024,7 @@ impl FolioApp {
             .visual_line(self.editor.selection().focus, self.visual_line)
             .map_or(1, |i| layout.lines[i].page + 1);
         egui::CentralPanel::default()
-            .frame(
-                egui::Frame::new()
-                    .fill(Color32::from_rgb(225, 231, 233))
-                    .inner_margin(16.0),
-            )
+            .frame(egui::Frame::new().fill(theme::WORKSPACE).inner_margin(16.0))
             .show(ctx, |ui| {
                 if self.pending.is_some() || self.overwrite.is_some() || self.error.is_some() {
                     ui.disable();
@@ -1087,6 +1110,12 @@ impl FolioApp {
                                 Color32::from_black_alpha(30),
                             );
                             painter.rect_filled(page, 1.0, Color32::WHITE);
+                            painter.rect_stroke(
+                                page,
+                                1.0,
+                                Stroke::new(1.0, theme::BORDER),
+                                egui::StrokeKind::Inside,
+                            );
                             painter.text(
                                 page.right_bottom() - Vec2::new(20.0, 12.0),
                                 egui::Align2::RIGHT_BOTTOM,
@@ -1214,12 +1243,22 @@ impl FolioApp {
                 });
         }
         if !self.warnings.is_empty() {
-            egui::TopBottomPanel::bottom("import-warnings").show(ctx, |ui| {
-                ui.colored_label(
-                    Color32::from_rgb(145, 79, 0),
-                    "Import warnings — save a converted copy to a different file.",
-                );
-                egui::CollapsingHeader::new(format!("{} warnings", self.warnings.len())).show(
+            let frame = egui::Frame::new()
+                .fill(Color32::from_rgb(255, 248, 232))
+                .inner_margin(egui::Margin::symmetric(16, 10));
+            let panel = egui::TopBottomPanel::bottom("import-warnings").frame(frame);
+            panel.show(ctx, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(egui::RichText::new("Some document features could not be preserved").strong().color(theme::WARNING));
+                    let enabled = self.pending.is_none() && self.overwrite.is_none() && self.error.is_none();
+                    if ui.add_enabled(enabled, theme::primary_button("Save converted copy…")).clicked() {
+                        self.save(true, ctx);
+                    }
+                });
+                ui.label("Your original file is protected. Save the converted document to a different file.");
+                let count = self.warnings.len();
+                let label = if count == 1 { "warning" } else { "warnings" };
+                egui::CollapsingHeader::new(format!("{count} {label}")).show(
                     ui,
                     |ui| {
                         egui::ScrollArea::vertical()
@@ -1291,8 +1330,12 @@ impl eframe::App for FolioApp {
         self.ribbon(ctx);
         // A pending destructive operation blocks document/ribbon input until resolved.
         self.dialogs(ctx);
-        egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
-            ui.horizontal(|ui| {
+        let frame = egui::Frame::new()
+            .fill(Color32::WHITE)
+            .inner_margin(egui::Margin::symmetric(16, 8));
+        let panel = egui::TopBottomPanel::bottom("status").frame(frame);
+        panel.show(ctx, |ui| {
+            ui.horizontal_wrapped(|ui| {
                 let words: usize = self
                     .editor
                     .document()
@@ -1310,19 +1353,28 @@ impl eframe::App for FolioApp {
                 ui.separator();
                 ui.label(format!("{words} words"));
                 ui.separator();
-                ui.label(if self.editor.is_dirty() {
-                    "Unsaved changes"
+                let (status, color) = if self.editor.is_dirty() {
+                    ("Unsaved changes", theme::ACCENT)
                 } else if self
                     .protected
                     .as_ref()
                     .zip(self.path.as_ref())
                     .is_some_and(|(a, b)| files::same_file(a, b))
                 {
-                    "Imported • Save a copy"
+                    ("Imported • Save a copy", theme::WARNING)
+                } else if self.path.is_none() {
+                    ("New document", theme::MUTED)
                 } else {
-                    "Saved"
-                });
-                ui.label(&self.notice);
+                    ("Saved", theme::MUTED)
+                };
+                ui.colored_label(color, status);
+                if !self.notice.is_empty() && self.notice != status {
+                    ui.label(
+                        egui::RichText::new(&self.notice)
+                            .small()
+                            .color(theme::MUTED),
+                    );
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.add(
                         egui::Slider::new(&mut self.zoom, 0.25..=2.5)
@@ -1356,7 +1408,7 @@ fn main() -> eframe::Result {
         },
         Box::new(|cc| {
             layout::install_fonts(&cc.egui_ctx);
-            cc.egui_ctx.set_visuals(egui::Visuals::light());
+            theme::install(&cc.egui_ctx);
             Ok(Box::new(FolioApp::default()))
         }),
     )
@@ -1365,6 +1417,30 @@ fn main() -> eframe::Result {
 #[cfg(test)]
 mod app_tests {
     use super::*;
+    #[test]
+    fn page_break_replaces_selection_in_one_undo_step() {
+        let ctx = egui::Context::default();
+        let mut app = FolioApp::default();
+        app.insert("first\nsecond".into());
+        app.editor.mark_saved();
+        let original = app.editor.document().clone();
+        let selection = Selection::new(Position::new(1, 3), Position::new(0, 2));
+        app.editor.set_selection(selection).unwrap();
+        app.action(Action::PageBreak, &ctx);
+        assert_eq!(app.editor.document().paragraph(0).unwrap().text(), "fi");
+        assert_eq!(app.editor.document().paragraph(2).unwrap().text(), "ond");
+        let replaced = app.editor.document().clone();
+        app.action(Action::Undo, &ctx);
+        assert_eq!(app.editor.document(), &original);
+        assert_eq!(app.editor.selection(), selection);
+        assert!(!app.editor.is_dirty());
+        app.action(Action::Redo, &ctx);
+        assert_eq!(app.editor.document(), &replaced);
+        assert_eq!(
+            app.editor.selection(),
+            Selection::caret(Position::new(2, 0))
+        );
+    }
     #[test]
     fn integrated_docx_save_reopen_and_warned_copy_destination() {
         let ctx = egui::Context::default();

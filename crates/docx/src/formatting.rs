@@ -312,6 +312,12 @@ impl Styles {
                 }
             } else if n.is("style") {
                 d.attrs(&n, &["styleId", "type", "default", "customStyle"], &[]);
+                if n.child("pPr").and_then(|p| p.child("rPr")).is_some() {
+                    d.warn(
+                        Feature::Styles,
+                        "Paragraph-mark formatting in a named style omitted; save a converted copy",
+                    );
+                }
                 let id = n
                     .attr("styleId")
                     .ok_or_else(|| invalid("style missing styleId"))?

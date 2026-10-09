@@ -16,8 +16,10 @@ East Asian/complex-script slots, theme fonts and theme colors cannot be preserve
 Import resolves document defaults, default/selected paragraph styles,
 `basedOn` chains, character styles and direct formatting. Bold/italic in style
 chains use toggle semantics; direct formatting can explicitly clear them.
-Paragraph-mark formatting controls the empty paragraph typing style and does
-not incorrectly override existing runs. Spacing attributes inherit independently.
+Direct paragraph-mark formatting controls the empty paragraph typing style and
+does not incorrectly override existing runs. Paragraph-mark formatting nested in
+named styles is omitted with a warning, requiring a converted copy.
+Spacing attributes inherit independently.
 XML namespaces are resolved by URI, including alternate prefixes and the strict
 WordprocessingML URI. Package relationships locate the main document and styles;
 neither is assumed to live at a fixed path. UTF-8 XML, predefined/numeric entities,
@@ -28,7 +30,8 @@ valid main-document content type/relationship declarations. Paragraph and run
 properties are explicit, so named styles are flattened into supported semantics.
 Page dimensions are oriented exactly once. Structural break blocks are encoded
 as break-only paragraphs; consecutive breaks and ordinary empty paragraphs
-round-trip. Supported documents reopen through the importer without warnings.
+round-trip. Break-only paragraphs with spacing or typing styles retain their
+formatted empty paragraphs. Supported documents reopen through the importer without warnings.
 Line multiples that cannot be expressed exactly in Word's 1/240-line units
 produce approximation warnings. Adjacent equal runs are normalized semantically.
 

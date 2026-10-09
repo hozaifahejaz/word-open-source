@@ -649,6 +649,68 @@ impl FolioApp {
             style: self.typing.clone(),
         });
     }
+    fn change_case(&mut self, case: editing::TextCase) {
+        if self.editor.selection().is_collapsed() {
+            return;
+        }
+        let text = editing::transform_case(&editing::selected_text(&self.editor), case);
+        self.execute(Command::ReplaceText {
+            selection: self.editor.selection(),
+            text,
+            style: None,
+        });
+        self.typing = None;
+        self.focus_canvas = true;
+    }
+    fn writing_tools_ui(&mut self, ui: &mut egui::Ui) {
+        let menu = ui.menu_button("Aa", |ui| {
+            for (label, case) in [
+                ("UPPERCASE", editing::TextCase::Upper),
+                ("lowercase", editing::TextCase::Lower),
+                ("Title case", editing::TextCase::Title),
+                ("Sentence case", editing::TextCase::Sentence),
+            ] {
+                if ui
+                    .add_enabled(
+                        !self.editor.selection().is_collapsed(),
+                        egui::Button::new(label),
+                    )
+                    .clicked()
+                {
+                    self.change_case(case);
+                    ui.close();
+                }
+            }
+        });
+        menu.response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "Change case")
+        });
+        menu.response.on_hover_text("Change case of selected text");
+        ui.menu_button("Symbols", |ui| {
+            egui::Grid::new("symbol-picker")
+                .num_columns(2)
+                .show(ui, |ui| {
+                    for (index, &(label, action, text)) in editing::SYMBOLS.iter().enumerate() {
+                        let response = ui.button(label);
+                        response.widget_info(|| {
+                            egui::WidgetInfo::labeled(
+                                egui::WidgetType::Button,
+                                ui.is_enabled(),
+                                action,
+                            )
+                        });
+                        if response.clicked() {
+                            self.insert(text.into());
+                            self.focus_canvas = true;
+                            ui.close();
+                        }
+                        if index % 2 == 1 {
+                            ui.end_row();
+                        }
+                    }
+                });
+        });
+    }
     fn current_style(&self) -> TextStyle {
         self.typing
             .clone()
@@ -1381,6 +1443,7 @@ impl FolioApp {
                         {
                             self.action(Action::ClearFormatting, ctx);
                         }
+                        self.writing_tools_ui(ui);
                         ui.separator();
                         let style = self.current_style();
                         for (label, selected, action) in [
@@ -4280,6 +4343,266 @@ mod app_tests {
         }
         requested_reveal
     }
+    #[test]
+    fn case_menu_converts_unicode_and_preserves_punctuation_and_whitespace() {
+        let ctx = egui::Context::default();
+        layout::install_fonts(&ctx);
+        for (label, source, expected) in [
+            ("UPPERCASE", "Straße é e\u{301} 👩‍💻", "STRASSE É E\u{301} 👩‍💻"),
+            ("lowercase", "İ Σ É E\u{301}", "i\u{307} σ é e\u{301}"),
+            ("Title case", "İETA ΣΟΣ", "İeta Σος"),
+            (
+                "Title case",
+                "  ÉCOLE\tE\u{301}LAN\nßETA\u{a0}‘HELLO’ 👩‍💻ABC",
+                "  École\tE\u{301}lan\nSSeta\u{a0}‘hello’ 👩‍💻abc",
+            ),
+            (
+                "Sentence case",
+                " \tÉCOLE!\nİ NEXT?\u{a0}E\u{301}LAN.  ßETA.NO!YES \t‘HI’",
+                " \tÉcole!\nI\u{307} next?\u{a0}E\u{301}lan.  SSeta.no!yes \t‘hi’",
+            ),
+        ] {
+            let mut app = FolioApp::default();
+            app.insert(source.into());
+            app.editor
+                .set_selection(editing::select_all(app.editor.document()))
+                .unwrap();
+            click_search_text(&mut app, &ctx, "Aa");
+            assert!(click_search_text(&mut app, &ctx, label));
+            assert_eq!(editing::selected_text(&app.editor), "");
+            assert_eq!(
+                app.editor
+                    .document()
+                    .blocks
+                    .iter()
+                    .filter_map(|block| {
+                        if let Block::Paragraph(p) = block {
+                            Some(p.text())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                expected
+            );
+            let last = expected.rsplit('\n').next().unwrap();
+            assert_eq!(app.editor.selection().focus.offset, last.len());
+        }
+    }
+
+    #[test]
+    fn case_menu_replaces_reversed_selection_and_undo_redo_restore_it() {
+        let ctx = egui::Context::default();
+        layout::install_fonts(&ctx);
+        let mut app = FolioApp::default();
+        app.insert("keep Straße after".into());
+        app.editor.mark_saved();
+        let original = app.editor.document().clone();
+        let selection = Selection::new(Position::new(0, 12), Position::new(0, 5));
+        app.editor.set_selection(selection).unwrap();
+        click_search_text(&mut app, &ctx, "Aa");
+        click_search_text(&mut app, &ctx, "UPPERCASE");
+        assert_eq!(
+            app.editor.document().paragraph(0).unwrap().text(),
+            "keep STRASSE after"
+        );
+        assert_eq!(
+            app.editor.selection(),
+            Selection::caret(Position::new(0, 12))
+        );
+        assert!(ctx.memory(|m| m.has_focus(egui::Id::new("document-canvas"))));
+        assert!(app.editor.is_dirty());
+        app.action(Action::Undo, &ctx);
+        assert_eq!(app.editor.document(), &original);
+        assert_eq!(app.editor.selection(), selection);
+        assert!(!app.editor.is_dirty());
+        app.action(Action::Redo, &ctx);
+        assert_eq!(
+            app.editor.document().paragraph(0).unwrap().text(),
+            "keep STRASSE after"
+        );
+        assert_eq!(
+            app.editor.selection(),
+            Selection::caret(Position::new(0, 12))
+        );
+        // A caret must never convert the whole document or change history.
+        app.editor.mark_saved();
+        let converted = app.editor.document().clone();
+        click_search_text(&mut app, &ctx, "Aa");
+        click_search_text(&mut app, &ctx, "lowercase");
+        assert_eq!(app.editor.document(), &converted);
+        assert!(!app.editor.is_dirty());
+    }
+
+    #[test]
+    fn symbols_picker_inserts_exact_unicode_and_replaces_selection_undoably() {
+        let ctx = egui::Context::default();
+        layout::install_fonts(&ctx);
+        for (label, symbol) in [
+            ("Nonbreaking space", "\u{a0}"),
+            ("Nonbreaking hyphen ‑", "\u{2011}"),
+            ("Em dash —", "\u{2014}"),
+            ("Ellipsis …", "\u{2026}"),
+            ("Bullet •", "\u{2022}"),
+            ("Copyright ©", "\u{a9}"),
+            ("Pound £", "\u{a3}"),
+            ("Euro €", "\u{20ac}"),
+            ("Yen ¥", "\u{a5}"),
+            ("Plus/minus ±", "\u{b1}"),
+            ("Multiplication ×", "\u{d7}"),
+            ("Division ÷", "\u{f7}"),
+            ("Left arrow ←", "\u{2190}"),
+            ("Right arrow →", "\u{2192}"),
+            ("Up arrow ↑", "\u{2191}"),
+            ("Down arrow ↓", "\u{2193}"),
+            ("Check mark ✓", "\u{2713}"),
+            ("Grinning face 😀", "\u{1f600}"),
+            ("Red heart ❤️", "\u{2764}\u{fe0f}"),
+        ] {
+            for replace in [false, true] {
+                let mut app = FolioApp::default();
+                app.insert("a選b".into());
+                app.editor.mark_saved();
+                let selection = if replace {
+                    Selection::new(Position::new(0, 4), Position::new(0, 1))
+                } else {
+                    Selection::caret(Position::new(0, 1))
+                };
+                app.editor.set_selection(selection).unwrap();
+                click_search_text(&mut app, &ctx, "Symbols");
+                assert!(click_search_text(&mut app, &ctx, label));
+                let expected = if replace {
+                    format!("a{symbol}b")
+                } else {
+                    format!("a{symbol}選b")
+                };
+                assert_eq!(app.editor.document().paragraph(0).unwrap().text(), expected);
+                assert_eq!(
+                    app.editor.selection(),
+                    Selection::caret(Position::new(0, 1 + symbol.len()))
+                );
+                assert!(app.editor.is_dirty());
+                assert!(ctx.memory(|m| m.has_focus(egui::Id::new("document-canvas"))));
+                let output = frame(&mut app, &ctx, vec![]);
+                assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == label)), "picker must close after insertion");
+                app.action(Action::Undo, &ctx);
+                assert_eq!(app.editor.document().paragraph(0).unwrap().text(), "a選b");
+                assert_eq!(app.editor.selection(), selection);
+                assert!(!app.editor.is_dirty());
+                app.action(Action::Redo, &ctx);
+                assert_eq!(app.editor.document().paragraph(0).unwrap().text(), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn writing_tools_expose_accessible_actions_and_symbols_support_keyboard_activation() {
+        let ctx = egui::Context::default();
+        layout::install_fonts(&ctx);
+        ctx.enable_accesskit();
+        let mut app = FolioApp::default();
+        app.insert("keep".into());
+        app.editor.mark_saved();
+        let labels = |output: &egui::FullOutput| {
+            output
+                .platform_output
+                .accesskit_update
+                .as_ref()
+                .unwrap()
+                .nodes
+                .iter()
+                .filter_map(|(_, node)| node.label().map(str::to_owned))
+                .collect::<Vec<_>>()
+        };
+        let output = frame(&mut app, &ctx, vec![]);
+        assert!(labels(&output).contains(&"Change case".into()));
+        assert!(labels(&output).contains(&"Symbols".into()));
+        click_search_text(&mut app, &ctx, "Aa");
+        let output = frame(&mut app, &ctx, vec![]);
+        for action in ["UPPERCASE", "lowercase", "Title case", "Sentence case"] {
+            assert!(labels(&output).contains(&action.into()));
+        }
+        frame(&mut app, &ctx, vec![key(Key::Escape, Default::default())]);
+        let mut symbols_focused = false;
+        for _ in 0..80 {
+            let output = frame(&mut app, &ctx, vec![key(Key::Tab, Default::default())]);
+            let update = output.platform_output.accesskit_update.as_ref().unwrap();
+            if update
+                .nodes
+                .iter()
+                .any(|(id, node)| *id == update.focus && node.label() == Some("Symbols"))
+            {
+                symbols_focused = true;
+                break;
+            }
+        }
+        assert!(
+            symbols_focused,
+            "Symbols menu must be reachable by keyboard"
+        );
+        frame(&mut app, &ctx, vec![key(Key::Enter, Default::default())]);
+        let output = frame(&mut app, &ctx, vec![]);
+        for name in [
+            "nonbreaking space",
+            "nonbreaking hyphen",
+            "em dash",
+            "ellipsis",
+            "bullet",
+            "copyright",
+            "pound",
+            "euro",
+            "yen",
+            "plus/minus",
+            "multiplication",
+            "division",
+            "left arrow",
+            "right arrow",
+            "up arrow",
+            "down arrow",
+            "check mark",
+            "grinning face",
+            "red heart",
+        ] {
+            assert!(
+                labels(&output).contains(&format!("Insert {name}")),
+                "missing accessible symbol action: {name}"
+            );
+        }
+        // Reach symbol actions with Tab, activate with Enter, and never insert that Enter.
+        let mut reached = false;
+        let mut reached_actions = std::collections::HashSet::new();
+        for _ in 0..80 {
+            let output = frame(&mut app, &ctx, vec![key(Key::Tab, Default::default())]);
+            let update = output.platform_output.accesskit_update.as_ref().unwrap();
+            if let Some(label) = update
+                .nodes
+                .iter()
+                .find_map(|(id, node)| (*id == update.focus).then(|| node.label()).flatten())
+            {
+                if label.starts_with("Insert ") {
+                    reached_actions.insert(label.to_owned());
+                }
+                if label == "Insert red heart" && reached_actions.len() == 19 {
+                    reached = true;
+                    break;
+                }
+            }
+        }
+        assert!(
+            reached,
+            "all 19 symbol actions must be reachable by keyboard: {reached_actions:?}"
+        );
+        frame(&mut app, &ctx, vec![key(Key::Enter, Default::default())]);
+        assert_eq!(app.editor.document().paragraph(0).unwrap().text(), "keep❤️");
+        assert_eq!(app.editor.document().blocks.len(), 1);
+        frame(&mut app, &ctx, vec![egui::Event::Text("!".into())]);
+        assert_eq!(
+            app.editor.document().paragraph(0).unwrap().text(),
+            "keep❤️!"
+        );
+    }
+
     #[test]
     fn search_results_virtualize_and_scrolled_rows_remain_selectable() {
         let ctx = egui::Context::default();

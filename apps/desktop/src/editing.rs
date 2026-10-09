@@ -109,6 +109,80 @@ pub fn selected_text(editor: &Editor) -> String {
     result
 }
 
+#[derive(Clone, Copy)]
+pub enum TextCase {
+    Upper,
+    Lower,
+    Title,
+    Sentence,
+}
+
+pub fn transform_case(text: &str, case: TextCase) -> String {
+    match case {
+        TextCase::Upper => text.to_uppercase(),
+        TextCase::Lower => text.to_lowercase(),
+        TextCase::Title => {
+            let mut result = String::with_capacity(text.len());
+            for token in text.split_inclusive(char::is_whitespace) {
+                let first = token.graphemes(true).next().unwrap();
+                result.push_str(&first.to_uppercase());
+                result.push_str(&token[first.len()..].to_lowercase());
+            }
+            result
+        }
+        TextCase::Sentence => {
+            let lower = text.to_lowercase();
+            let mut result = String::with_capacity(lower.len());
+            let mut capitalize = true;
+            let mut after_terminal = false;
+            for grapheme in lower.graphemes(true) {
+                if grapheme.chars().all(char::is_whitespace) {
+                    result.push_str(grapheme);
+                    if after_terminal {
+                        capitalize = true;
+                    }
+                } else {
+                    if capitalize {
+                        result.push_str(&grapheme.to_uppercase());
+                    } else {
+                        result.push_str(grapheme);
+                    }
+                    capitalize = false;
+                }
+                after_terminal = matches!(grapheme, "." | "?" | "!");
+            }
+            result
+        }
+    }
+}
+
+/// Visible labels and spoken action names accompany the exact inserted sequences.
+pub const SYMBOLS: &[(&str, &str, &str)] = &[
+    ("Nonbreaking space", "Insert nonbreaking space", "\u{00a0}"),
+    (
+        "Nonbreaking hyphen ‑",
+        "Insert nonbreaking hyphen",
+        "\u{2011}",
+    ),
+    ("Em dash —", "Insert em dash", "\u{2014}"),
+    ("Ellipsis …", "Insert ellipsis", "\u{2026}"),
+    ("Bullet •", "Insert bullet", "\u{2022}"),
+    ("Copyright ©", "Insert copyright", "\u{00a9}"),
+    ("Pound £", "Insert pound", "\u{00a3}"),
+    ("Euro €", "Insert euro", "\u{20ac}"),
+    ("Yen ¥", "Insert yen", "\u{00a5}"),
+    ("Plus/minus ±", "Insert plus/minus", "\u{00b1}"),
+    ("Multiplication ×", "Insert multiplication", "\u{00d7}"),
+    ("Division ÷", "Insert division", "\u{00f7}"),
+    ("Left arrow ←", "Insert left arrow", "\u{2190}"),
+    ("Right arrow →", "Insert right arrow", "\u{2192}"),
+    ("Up arrow ↑", "Insert up arrow", "\u{2191}"),
+    ("Down arrow ↓", "Insert down arrow", "\u{2193}"),
+    ("Check mark ✓", "Insert check mark", "\u{2713}"),
+    ("Grinning face 😀", "Insert grinning face", "\u{1f600}"),
+    ("Red heart ❤️", "Insert red heart", "\u{2764}\u{fe0f}"),
+];
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Statistics {
     pub words: usize,

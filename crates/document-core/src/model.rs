@@ -1,9 +1,10 @@
+use serde::{Deserialize, Serialize};
 use std::{error::Error, fmt};
 use unicode_segmentation::UnicodeSegmentation;
 
 /// Positions use UTF-8 byte offsets in a paragraph's concatenated text.
 /// Only extended grapheme boundaries are valid editing positions.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Position {
     pub block: usize,
     pub offset: usize,
@@ -15,7 +16,7 @@ impl Position {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Selection {
     pub anchor: Position,
     pub focus: Position,
@@ -43,7 +44,7 @@ impl Selection {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Color {
     pub red: u8,
     pub green: u8,
@@ -61,7 +62,7 @@ impl Color {
 }
 
 /// Font sizes are half-points (24 means 12pt), matching WordprocessingML.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TextStyle {
     pub bold: bool,
     pub italic: bool,
@@ -124,7 +125,7 @@ impl StylePatch {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Run {
     pub text: String,
     pub style: TextStyle,
@@ -138,7 +139,7 @@ impl Run {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Alignment {
     #[default]
     Left,
@@ -148,7 +149,7 @@ pub enum Alignment {
 }
 
 /// Paragraph distances are nonnegative twips (1/1440 inch).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LineSpacing {
     Multiple(u16),
     Exact(u32),
@@ -160,7 +161,7 @@ impl Default for LineSpacing {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParagraphStyle {
     pub alignment: Alignment,
     pub space_before_twips: u32,
@@ -201,7 +202,7 @@ impl ParagraphPatch {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Paragraph {
     pub runs: Vec<Run>,
     pub style: ParagraphStyle,
@@ -289,13 +290,13 @@ impl Paragraph {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Block {
     Paragraph(Paragraph),
     PageBreak,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Orientation {
     #[default]
     Portrait,
@@ -303,7 +304,7 @@ pub enum Orientation {
 }
 
 /// Nominal width and height before orientation, in twips.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PageSize {
     pub width_twips: u32,
     pub height_twips: u32,
@@ -318,7 +319,7 @@ impl PageSize {
         height_twips: 15840,
     };
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Margins {
     pub top: u32,
     pub right: u32,
@@ -335,7 +336,7 @@ impl Default for Margins {
         }
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PageLayout {
     pub size: PageSize,
     pub orientation: Orientation,
@@ -375,7 +376,7 @@ impl PageLayout {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Document {
     pub blocks: Vec<Block>,
     pub page_layout: PageLayout,
@@ -458,7 +459,7 @@ impl Document {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WarningCode {
     UnsupportedFeature,
     ApproximatedFormatting,
@@ -466,7 +467,7 @@ pub enum WarningCode {
     InvalidValue,
     ResourceLimit,
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Feature {
     Tables,
     Images,
@@ -480,7 +481,7 @@ pub enum Feature {
     EmbeddedObjects,
     Other(String),
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImportWarning {
     pub code: WarningCode,
     pub feature: Feature,

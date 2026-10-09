@@ -10,6 +10,8 @@ authors = ["hozaifahejaz"]
 license = "MIT"
 
 [workspace.dependencies]
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.145"
 document-core = { path = "crates/document-core" }
 folio-docx = { path = "crates/docx" }
 unicode-segmentation = "=1.12.0"

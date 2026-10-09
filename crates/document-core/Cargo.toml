@@ -8,4 +8,8 @@ license.workspace = true
 description = "UI-independent rich text model and editing commands for Folio"
 
 [dependencies]
+serde.workspace = true
 unicode-segmentation.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

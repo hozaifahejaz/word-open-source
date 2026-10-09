@@ -11,7 +11,7 @@ use egui::{Color32, Key, Rect, Stroke, Vec2};
 use icons::{Icon, IconButton};
 use layout::DocumentLayout;
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use workspace::{CheckpointDebounce, RecoverySnapshot, StoredPath, WorkspaceState, WorkspaceStore};
@@ -42,6 +42,7 @@ struct FolioApp {
     error: Option<String>,
     notice: String,
     pending: Option<Pending>,
+    open_target: Option<PathBuf>,
     overwrite: Option<PathBuf>,
     search_open: bool,
     focus_search: bool,
@@ -83,6 +84,7 @@ impl Default for FolioApp {
             error: None,
             notice: String::new(),
             pending: None,
+            open_target: None,
             overwrite: None,
             search_open: false,
             focus_search: false,
@@ -200,6 +202,7 @@ impl FolioApp {
         true
     }
     fn schedule_checkpoints(&mut self, now: Instant) {
+        self.capture_caret();
         if self.observed_document != *self.editor.document() {
             self.observed_document = self.editor.document().clone();
             if self.editor.is_dirty() {
@@ -273,9 +276,11 @@ impl FolioApp {
         true
     }
     fn new_document(&mut self) -> Result<(), String> {
+        self.ensure_recovery_resolved()?;
         if !self.clear_recovery() {
             return Err(self.error.clone().unwrap());
         }
+        self.capture_caret();
         self.editor = Editor::default();
         self.path = None;
         self.protected = None;
@@ -286,32 +291,119 @@ impl FolioApp {
         self.observed_document = self.editor.document().clone();
         Ok(())
     }
+    fn ensure_recovery_resolved(&self) -> Result<(), String> {
+        if self.pending_recovery.is_some() {
+            Err("Resolve the startup recovery prompt before opening or saving documents".into())
+        } else {
+            Ok(())
+        }
+    }
+    fn capture_caret(&mut self) {
+        let Some(path) = self.path.as_deref() else {
+            return;
+        };
+        if let Ok(stored) = StoredPath::from_path(path) {
+            let position = self.editor.selection().focus;
+            if self.workspace_state.caret_for(&stored) != Some(position) {
+                self.workspace_state.set_caret(stored, position);
+            }
+        }
+    }
+    fn remembered_caret(&self, path: &Path, stored: &StoredPath) -> Option<Position> {
+        self.workspace_state.caret_for(stored).or_else(|| {
+            self.workspace_state.carets.iter().find_map(|caret| {
+                caret
+                    .path
+                    .to_path()
+                    .ok()
+                    .filter(|other| files::same_file(path, other))
+                    .map(|_| caret.position)
+            })
+        })
+    }
+    fn record_recent_path(&mut self, path: &Path, stored: StoredPath) {
+        // Resolve identity only for accessible paths; disconnected entries remain intact.
+        self.workspace_state.recent.retain(|recent| {
+            !recent
+                .path
+                .to_path()
+                .is_ok_and(|other| files::same_file(path, &other))
+        });
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        self.workspace_state.record_recent(stored, timestamp);
+    }
+    #[allow(dead_code)] // Used by the Recent Documents UI in the next plan task.
+    fn request_open_path(&mut self, path: PathBuf, ctx: &egui::Context) {
+        if let Err(error) = self.ensure_recovery_resolved() {
+            self.error = Some(error);
+            return;
+        }
+        self.open_target = Some(path);
+        self.request(Pending::Open, ctx);
+    }
+    fn accept_open_choice(&mut self, path: Option<PathBuf>) {
+        if let Some(path) = path {
+            if let Err(error) = self.open_path(&path) {
+                self.error = Some(format!("Could not open {}: {error}", path.display()));
+            }
+        }
+    }
     fn open_document(&mut self, path: PathBuf) -> Result<(), String> {
-        let report = files::open(&path)?;
+        self.open_path(&path)
+    }
+    // The caller resolves unsaved changes before invoking this shared UI/MCP operation.
+    fn open_path(&mut self, path: &Path) -> Result<(), String> {
+        self.ensure_recovery_resolved()?;
+        let report = files::open(path)?;
+        let stored = StoredPath::from_path(path).map_err(|error| error.to_string())?;
         // Validate the incoming document before cleanup, and retain the current editor
         // until both validation and recovery cleanup have succeeded.
         let mut editor = self.editor.clone();
         editor
             .load_document(report.document)
             .map_err(|error| error.to_string())?;
+        let caret = if self
+            .path
+            .as_deref()
+            .is_some_and(|current| files::same_file(current, path))
+        {
+            Some(self.editor.selection().focus)
+        } else {
+            self.remembered_caret(path, &stored)
+        };
+        if let Some(position) = caret {
+            // Invalid/stale positions leave load_document's valid initial caret intact.
+            let _ = editor.set_selection(Selection::caret(position));
+        }
         if !self.clear_recovery() {
             return Err(self.error.clone().unwrap());
         }
+        self.capture_caret();
         self.editor = editor;
-        self.protected = (!report.warnings.is_empty()).then(|| path.clone());
-        self.path = Some(path);
+        self.protected = (!report.warnings.is_empty()).then(|| path.to_path_buf());
+        self.path = Some(path.to_path_buf());
         self.warnings = report.warnings;
         self.typing = None;
         self.notice = "Document opened".into();
         self.focus_canvas = true;
         self.reveal = true;
         self.observed_document = self.editor.document().clone();
+        self.record_recent_path(path, stored);
+        self.capture_caret();
         Ok(())
     }
     fn save_document(&mut self, path: PathBuf) -> Result<(), String> {
+        self.ensure_recovery_resolved()?;
+        let stored = StoredPath::from_path(&path).map_err(|error| error.to_string())?;
         files::save(self.editor.document(), &path, self.protected.as_deref())?;
+        self.capture_caret();
         self.editor.mark_saved();
+        self.record_recent_path(&path, stored);
         self.path = Some(path);
+        self.capture_caret();
         self.notice = "Saved".into();
         self.focus_canvas = true;
         if !self.clear_recovery() {
@@ -594,6 +686,7 @@ impl FolioApp {
         }
         self.pending = None;
         if matches!(pending, Pending::Quit) {
+            self.capture_caret();
             self.allow_close = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         } else {
@@ -601,6 +694,12 @@ impl FolioApp {
         }
     }
     fn request(&mut self, pending: Pending, ctx: &egui::Context) {
+        if self.pending_recovery.is_some() {
+            return;
+        }
+        if !matches!(pending, Pending::Open) {
+            self.open_target = None;
+        }
         self.composition = None;
         if self.editor.is_dirty() {
             self.pending = Some(pending);
@@ -616,16 +715,15 @@ impl FolioApp {
                 }
             }
             Pending::Open => {
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("Word document", &["docx"])
-                    .pick_file()
-                {
-                    if let Err(error) = self.open_document(path.clone()) {
-                        self.error = Some(format!("Could not open {}: {error}", path.display()));
-                    }
-                }
+                let path = self.open_target.take().or_else(|| {
+                    rfd::FileDialog::new()
+                        .add_filter("Word document", &["docx"])
+                        .pick_file()
+                });
+                self.accept_open_choice(path);
             }
             Pending::Quit => {
+                self.capture_caret();
                 if self.recovery_cleanup_pending && !self.clear_recovery() {
                     return;
                 }
@@ -1940,6 +2038,7 @@ impl FolioApp {
                         }
                         if ui.button("Cancel").clicked() {
                             self.pending = None;
+                            self.open_target = None;
                             self.focus_canvas = true;
                         }
                     });
@@ -2222,6 +2321,173 @@ mod app_tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+    fn lifecycle_file(dir: &RecoveryDirectory, name: &str) -> PathBuf {
+        let path = dir.0.join(name);
+        std::fs::create_dir_all(&dir.0).unwrap();
+        files::save(&Document::default(), &path, None).unwrap();
+        path
+    }
+    #[test]
+    fn successful_open_adds_recent_but_cancelled_dialog_does_not() {
+        let dir = RecoveryDirectory::new();
+        let path = lifecycle_file(&dir, "open.docx");
+        let mut app = dir.app();
+        app.open_path(&path).unwrap();
+        assert_eq!(app.workspace_state.recent[0].path.to_path().unwrap(), path);
+        let state = app.workspace_state.clone();
+        app.accept_open_choice(None);
+        assert_eq!(app.workspace_state, state);
+    }
+    #[test]
+    fn recent_open_waits_for_unsaved_change_decision() {
+        let dir = RecoveryDirectory::new();
+        let path = lifecycle_file(&dir, "recent.docx");
+        let mut app = dir.app();
+        app.insert("unsaved".into());
+        let before = app.editor.document().clone();
+        let ctx = egui::Context::default();
+        app.request_open_path(path.clone(), &ctx);
+        assert!(matches!(app.pending, Some(Pending::Open)));
+        assert_eq!(app.editor.document(), &before);
+        assert!(app.workspace_state.recent.is_empty());
+        app.discard_pending(Pending::Open, &ctx);
+        assert_eq!(app.path, Some(path));
+        assert!(!app.editor.is_dirty());
+    }
+    #[test]
+    fn successful_save_adds_recent_and_clears_recovery() {
+        let dir = RecoveryDirectory::new();
+        let mut app = dir.app();
+        app.insert("save".into());
+        assert!(app.flush_recovery());
+        let path = dir.0.join("saved.docx");
+        app.save_document(path.clone()).unwrap();
+        assert_eq!(app.workspace_state.recent[0].path.to_path().unwrap(), path);
+        assert!(
+            app.workspace_store
+                .as_ref()
+                .unwrap()
+                .load_recovery()
+                .unwrap()
+                .is_none()
+        );
+    }
+    #[test]
+    fn failed_save_retains_recovery() {
+        let dir = RecoveryDirectory::new();
+        let mut app = dir.app();
+        app.insert("save".into());
+        assert!(app.flush_recovery());
+        assert!(app.save_document(dir.0.join("absent/saved.docx")).is_err());
+        assert!(app.workspace_state.recent.is_empty());
+        assert!(
+            app.workspace_store
+                .as_ref()
+                .unwrap()
+                .load_recovery()
+                .unwrap()
+                .is_some()
+        );
+    }
+    #[test]
+    fn same_file_alias_does_not_duplicate_recent() {
+        let dir = RecoveryDirectory::new();
+        let path = lifecycle_file(&dir, "original.docx");
+        let alias = dir.0.join("alias.docx");
+        std::fs::hard_link(&path, &alias).unwrap();
+        let mut app = dir.app();
+        app.open_path(&path).unwrap();
+        app.open_path(&alias).unwrap();
+        assert_eq!(app.workspace_state.recent.len(), 1);
+        assert_eq!(app.workspace_state.recent[0].path.to_path().unwrap(), alias);
+    }
+    #[test]
+    fn missing_recent_path_is_retained() {
+        let dir = RecoveryDirectory::new();
+        let missing = dir.0.join("missing.docx");
+        let mut app = dir.app();
+        app.workspace_state
+            .record_recent(StoredPath::from_path(&missing).unwrap(), 1);
+        let state = app.workspace_state.clone();
+        assert!(app.open_path(&missing).is_err());
+        assert_eq!(app.workspace_state, state);
+    }
+    #[test]
+    fn stale_caret_restores_as_valid_caret() {
+        let dir = RecoveryDirectory::new();
+        let path = lifecycle_file(&dir, "caret.docx");
+        let mut app = dir.app();
+        app.workspace_state.set_caret(
+            StoredPath::from_path(&path).unwrap(),
+            Position::new(90, 900),
+        );
+        app.open_path(&path).unwrap();
+        assert_eq!(
+            app.editor.selection(),
+            Selection::caret(Position::new(0, 0))
+        );
+    }
+    #[test]
+    fn remembered_caret_tracks_focus_and_restores_across_aliases() {
+        let dir = RecoveryDirectory::new();
+        let mut app = dir.app();
+        app.insert("hello 🌻".into());
+        let path = dir.0.join("caret.docx");
+        std::fs::create_dir_all(&dir.0).unwrap();
+        app.save_document(path.clone()).unwrap();
+        let alias = dir.0.join("alias.docx");
+        std::fs::hard_link(&path, &alias).unwrap();
+        app.editor
+            .set_selection(Selection {
+                anchor: Position::new(0, 0),
+                focus: Position::new(0, 5),
+            })
+            .unwrap();
+        app.schedule_checkpoints(Instant::now());
+        assert_eq!(
+            app.workspace_state
+                .caret_for(&StoredPath::from_path(&path).unwrap()),
+            Some(Position::new(0, 5))
+        );
+        app.new_document().unwrap();
+        app.open_path(&alias).unwrap();
+        assert_eq!(
+            app.editor.selection(),
+            Selection::caret(Position::new(0, 5))
+        );
+        app.workspace_state
+            .set_caret(StoredPath::from_path(&path).unwrap(), Position::new(0, 7));
+        app.new_document().unwrap();
+        app.open_path(&path).unwrap();
+        assert_eq!(
+            app.editor.selection(),
+            Selection::caret(Position::new(0, 0))
+        );
+    }
+    #[test]
+    fn recent_open_preserves_unresolved_startup_recovery() {
+        let dir = RecoveryDirectory::new();
+        let path = lifecycle_file(&dir, "target.docx");
+        let mut app = dir.app();
+        app.insert("recovered".into());
+        assert!(app.flush_recovery());
+        let mut startup = FolioApp::with_workspace_store(WorkspaceStore::at(dir.0.clone()));
+        startup.request_open_path(path.clone(), &egui::Context::default());
+        assert!(startup.pending_recovery.is_some());
+        assert!(startup.pending.is_none());
+        assert!(startup.open_target.is_none());
+        assert!(startup.workspace_state.recent.is_empty());
+        assert!(startup.open_path(&path).is_err());
+        assert!(
+            startup
+                .workspace_store
+                .as_ref()
+                .unwrap()
+                .load_recovery()
+                .unwrap()
+                .is_some()
+        );
     }
     #[test]
     fn startup_restores_theme_zoom_and_recents() {

@@ -205,6 +205,7 @@ impl FolioApp {
             .map(|path| path.to_path().unwrap());
         self.warnings = snapshot.warnings.clone();
         self.editor = editor;
+        // Restore stays unsaved until Save or a fresh edit schedules auto-save.
         self.observed_document = self.editor.document().clone();
         self.last_recovery_document = Some(self.editor.document().clone());
         self.pending_recovery = None;
@@ -242,6 +243,9 @@ impl FolioApp {
             if self.editor.is_dirty() {
                 self.recovery_checkpoint.mark_changed(now);
                 self.autosave_checkpoint.mark_changed(now);
+            } else {
+                // Undo to the saved baseline must not leave recoverable undone text.
+                self.flush_recovery();
             }
         }
     }
@@ -298,8 +302,20 @@ impl FolioApp {
         })
     }
     fn flush_recovery(&mut self) -> bool {
-        if !self.editor.is_dirty()
-            || self.workspace_store.is_none()
+        if !self.editor.is_dirty() {
+            self.recovery_checkpoint.clear();
+            self.autosave_checkpoint.clear();
+            // Only remove a journal written/restored by this session; unresolved
+            // or unreadable startup data requires the explicit discard action.
+            if self.pending_recovery.is_none()
+                && !self.unreadable_recovery
+                && (self.last_recovery_document.is_some() || self.recovery_cleanup_pending)
+            {
+                return self.clear_recovery();
+            }
+            return true;
+        }
+        if self.workspace_store.is_none()
             || self.last_recovery_document.as_ref() == Some(self.editor.document())
         {
             self.recovery_checkpoint.clear();
@@ -3577,6 +3593,118 @@ mod app_tests {
         }
     }
     #[test]
+    fn recovery_undo_to_baseline_clears_checkpoint_on_idle_or_normal_quit() {
+        for quit in [false, true] {
+            let dir = RecoveryDirectory::new();
+            let mut app = dir.app();
+            let ctx = egui::Context::default();
+            app.insert("deliberately undone".into());
+            let now = Instant::now();
+            app.schedule_checkpoints(now);
+            app.process_checkpoints(now + Duration::from_secs(2), &ctx);
+            assert!(dir.0.join("recovery.json").exists());
+            app.action(Action::Undo, &ctx);
+            assert!(!app.editor.is_dirty());
+            if quit {
+                app.request(Pending::Quit, &ctx);
+                assert!(app.allow_close);
+            } else {
+                app.schedule_checkpoints(now + Duration::from_secs(3));
+                app.process_checkpoints(now + Duration::from_secs(10), &ctx);
+            }
+            let startup = FolioApp::with_workspace_store(WorkspaceStore::at(dir.0.clone()));
+            assert!(startup.pending_recovery.is_none(), "quit: {quit}");
+            assert!(!dir.0.join("recovery.json").exists());
+        }
+    }
+    #[test]
+    fn recovery_undo_cleanup_failure_reports_preserves_and_retries_on_quit() {
+        let dir = RecoveryDirectory::new();
+        let mut app = dir.app();
+        let ctx = egui::Context::default();
+        app.insert("checkpoint data".into());
+        app.schedule_checkpoints(Instant::now());
+        assert!(app.flush_recovery());
+        let journal = dir.0.join("recovery.json");
+        let bytes = std::fs::read(&journal).unwrap();
+        std::fs::remove_file(&journal).unwrap();
+        std::fs::create_dir(&journal).unwrap();
+        std::fs::write(journal.join("sentinel"), &bytes).unwrap();
+        app.action(Action::Undo, &ctx);
+        let now = Instant::now();
+        app.schedule_checkpoints(now);
+        app.process_checkpoints(now + Duration::from_secs(10), &ctx);
+        assert!(
+            app.error
+                .as_ref()
+                .is_some_and(|e| e.contains("Could not clear recovery"))
+        );
+        assert!(app.recovery_cleanup_pending);
+        assert!(app.last_recovery_document.is_some());
+        assert_eq!(std::fs::read(journal.join("sentinel")).unwrap(), bytes);
+        app.request(Pending::Quit, &ctx);
+        assert!(!app.allow_close);
+        std::fs::remove_dir_all(&journal).unwrap();
+        std::fs::write(&journal, &bytes).unwrap();
+        app.error = None;
+        app.request(Pending::Quit, &ctx);
+        assert!(app.allow_close);
+        assert!(!journal.exists());
+    }
+    #[test]
+    fn unreadable_recovery_survives_undo_to_baseline_and_quit() {
+        for bytes in unreadable_recovery_bytes() {
+            let dir = RecoveryDirectory::new();
+            std::fs::create_dir_all(&dir.0).unwrap();
+            let journal = dir.0.join("recovery.json");
+            std::fs::write(&journal, bytes).unwrap();
+            let mut app = FolioApp::with_workspace_store(WorkspaceStore::at(dir.0.clone()));
+            app.error = None;
+            let ctx = egui::Context::default();
+            let now = Instant::now();
+            app.insert("temporary edit".into());
+            app.schedule_checkpoints(now);
+            app.action(Action::Undo, &ctx);
+            app.schedule_checkpoints(now + Duration::from_secs(1));
+            app.process_checkpoints(now + Duration::from_secs(10), &ctx);
+            app.request(Pending::Quit, &ctx);
+            assert!(app.allow_close);
+            assert_eq!(std::fs::read(&journal).unwrap(), bytes);
+        }
+    }
+    #[test]
+    fn recovery_restore_named_document_stays_unsaved_until_fresh_edit() {
+        let dir = RecoveryDirectory::new();
+        let mut original = dir.app();
+        let path = lifecycle_file(&dir, "saved.docx");
+        original.path = Some(path.clone());
+        original.insert("recovered text".into());
+        assert!(original.flush_recovery());
+        let mut app = FolioApp::with_workspace_store(WorkspaceStore::at(dir.0.clone()));
+        assert!(app.restore_startup_recovery());
+        assert!(app.protected.is_none());
+        let ctx = egui::Context::default();
+        let now = Instant::now();
+        app.schedule_checkpoints(now);
+        app.process_checkpoints(now + Duration::from_secs(10), &ctx);
+        assert!(app.editor.is_dirty());
+        assert_eq!(files::open(&path).unwrap().document, Document::default());
+        app.insert(" fresh edit".into());
+        app.schedule_checkpoints(now + Duration::from_secs(11));
+        app.process_checkpoints(now + Duration::from_secs(16), &ctx);
+        assert!(!app.editor.is_dirty());
+        assert_eq!(
+            files::open(&path)
+                .unwrap()
+                .document
+                .paragraph(0)
+                .unwrap()
+                .text(),
+            "recovered text fresh edit"
+        );
+        assert!(!dir.0.join("recovery.json").exists());
+    }
+    #[test]
     fn checkpoint_debounce_coalesces_rapid_edits() {
         let now = std::time::Instant::now();
         let mut checkpoint = workspace::CheckpointDebounce::default();
@@ -4399,7 +4527,7 @@ mod app_tests {
             (
                 "Title case",
                 "  ÉCOLE\tE\u{301}LAN\nßETA\u{a0}‘HELLO’ 👩‍💻ABC",
-                "  École\tE\u{301}lan\nSSeta\u{a0}‘hello’ 👩‍💻abc",
+                "  École\tE\u{301}lan\nSSeta\u{a0}‘Hello’ 👩‍💻Abc",
             ),
             (
                 "Sentence case",

@@ -2,8 +2,9 @@
 use unicode_segmentation::UnicodeSegmentation;
 
 /// Locale-independent Unicode case mappings. Title capitalizes the first
-/// original grapheme of each whitespace-delimited token; Sentence capitalizes
-/// the first grapheme and those after `.`, `?`, or `!` followed by whitespace.
+/// original cased grapheme of each whitespace-delimited token. Sentence
+/// capitalizes the first cased grapheme and those after `.`, `?`, or `!`
+/// followed by optional closing quotes/brackets and whitespace.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TextCase {
     Upper,
@@ -26,6 +27,12 @@ fn lower_mappings(text: &str) -> Vec<String> {
         .collect()
 }
 
+fn is_cased(grapheme: &str) -> bool {
+    grapheme
+        .chars()
+        .any(|ch| ch.to_lowercase().ne(ch.to_uppercase()))
+}
+
 pub(crate) fn case_mappings(text: &str, case: TextCase) -> Vec<String> {
     match case {
         TextCase::Upper => text.chars().map(|ch| ch.to_uppercase().collect()).collect(),
@@ -33,13 +40,23 @@ pub(crate) fn case_mappings(text: &str, case: TextCase) -> Vec<String> {
         TextCase::Title => {
             let mut mappings = Vec::new();
             for token in text.split_inclusive(char::is_whitespace) {
-                let first = token.graphemes(true).next().unwrap();
-                mappings.extend(
-                    first
-                        .chars()
-                        .map(|ch| ch.to_uppercase().collect::<String>()),
-                );
-                mappings.extend(lower_mappings(&token[first.len()..]));
+                // Keep the complete token's context when lowercasing Greek sigma.
+                let mut token_mappings = lower_mappings(token);
+                let mut scalar = 0;
+                for grapheme in token.graphemes(true) {
+                    let count = grapheme.chars().count();
+                    if is_cased(grapheme) {
+                        for (mapped, ch) in token_mappings[scalar..scalar + count]
+                            .iter_mut()
+                            .zip(grapheme.chars())
+                        {
+                            *mapped = ch.to_uppercase().collect();
+                        }
+                        break;
+                    }
+                    scalar += count;
+                }
+                mappings.extend(token_mappings);
             }
             mappings
         }
@@ -54,15 +71,22 @@ pub(crate) fn case_mappings(text: &str, case: TextCase) -> Vec<String> {
                     if after_terminal {
                         capitalize = true;
                     }
-                } else {
+                } else if is_cased(grapheme) {
                     if capitalize {
                         for mapped in &mut mappings[scalar..scalar + count] {
                             *mapped = mapped.to_uppercase();
                         }
                     }
                     capitalize = false;
+                    after_terminal = false;
+                } else if matches!(grapheme, "." | "?" | "!") {
+                    after_terminal = true;
+                } else if !matches!(
+                    grapheme,
+                    "\"" | "'" | "”" | "’" | "»" | "›" | ")" | "]" | "}"
+                ) {
+                    after_terminal = false;
                 }
-                after_terminal = matches!(grapheme, "." | "?" | "!");
                 scalar += count;
             }
             mappings

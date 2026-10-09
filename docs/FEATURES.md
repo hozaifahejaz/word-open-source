@@ -74,10 +74,11 @@ Update statuses after implementation; planned work is not supported behavior.
 
 The Home toolbar's Aa menu converts a non-empty selection to uppercase,
 lowercase, title case or sentence case using Rust Unicode mappings. Title case
-uppercases the first original grapheme of each Unicode-whitespace-delimited token
-and lowercases its remainder. Sentence case lowercases text, then uppercases the
-first non-whitespace grapheme and the first after `.`, `?` or `!` followed by
-whitespace. Whitespace and punctuation stay intact. The UI-independent
+uppercases the first original cased grapheme of each Unicode-whitespace-delimited
+token and lowercases the rest with full token context. Sentence case lowercases
+text, then uppercases the first cased grapheme and the first after `.`, `?` or `!`
+followed by optional closing quotes/brackets and whitespace. Opening punctuation
+does not consume capitalization. Whitespace and punctuation stay intact. The UI-independent
 `ConvertCase` core command preserves each run style, paragraph properties, empty-paragraph typing
 style and explicit page break. One transaction collapses the selection at its
 transformed end and supports Undo/Redo; unchanged text adds no dirty state or
@@ -119,7 +120,10 @@ retain literal case-sensitive behavior. Regex search remains **Deferred**.
 Local versioned state records preferences, recent paths and caret positions; it is
 not cloud sync or document version history. Recovery stores one dirty document
 snapshot, including selection, warnings and protected source. Restore is explicit
-and remains unsaved; successful save or explicit discard clears the snapshot.
+and remains unsaved until explicit Save or a fresh edit re-enables normal idle
+auto-save for eligible named files. Successful save, explicit discard or Undo back
+to the saved baseline clears this session's valid snapshot; cleanup failures are
+reported and retried on confirmed close without discarding the journal.
 Failed disk operations preserve recovery and report an error. Invalid/future state
 is reported and preserved rather than silently replaced. Idle auto-save does not
 apply to untitled documents or protected warned imports; those require explicit

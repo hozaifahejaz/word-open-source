@@ -906,3 +906,72 @@ fn unchanged_case_conversion_preserves_metadata_clean_state_and_history() {
     assert!(!e.can_redo());
     assert_eq!(e.selection(), Selection::caret(at(3, 4)));
 }
+
+#[test]
+fn title_case_keeps_final_sigma_context_styles_and_history() {
+    let mut e = Editor::new(case_fixture("Ο", "Σ ΟΣ")).unwrap();
+    let original = e.document().clone();
+    let selection = range((3, "ΟΣ ΟΣ".len()), (0, 5));
+    e.set_selection(selection).unwrap();
+    e.execute(Command::ConvertCase {
+        selection,
+        case: TextCase::Title,
+    })
+    .unwrap();
+    let expected = case_fixture("Ο", "ς Ος");
+    assert_eq!(e.document(), &expected);
+    let caret = Selection::caret(at(3, "Ος Ος".len()));
+    assert_eq!(e.selection(), caret);
+    e.document().validate().unwrap();
+    e.execute(Command::Undo).unwrap();
+    assert_eq!(e.document(), &original);
+    assert_eq!(e.selection(), selection);
+    assert!(!e.is_dirty());
+    assert!(!e.can_undo());
+    e.execute(Command::Redo).unwrap();
+    assert_eq!(e.document(), &expected);
+    assert_eq!(e.selection(), caret);
+}
+
+#[test]
+fn title_case_skips_opening_punctuation_and_preserves_styles() {
+    assert_case_preserves_styles(
+        TextCase::Title,
+        "\"HELLO\"  “ΟΣ”\t(İSTANBUL) ...",
+        "\"Hello\"  “Ος”\t(İstanbul) ...",
+    );
+}
+
+#[test]
+fn sentence_case_skips_opening_and_closing_punctuation_and_preserves_styles() {
+    for (case, input, expected) in [
+        (
+            TextCase::Sentence,
+            "\"HELLO.\"  “WORLD!”\t(ΟΣ) ...",
+            "\"Hello.\"  “World!”\t(Ος) ...",
+        ),
+        (TextCase::Sentence, "... \t\"...\"", "... \t\"...\""),
+        (
+            TextCase::Sentence,
+            "(E\u{301}COLE) IS OPEN?  \"YES\".",
+            "(E\u{301}cole) is open?  \"Yes\".",
+        ),
+    ] {
+        assert_case_preserves_styles(case, input, expected);
+    }
+}
+
+fn assert_case_preserves_styles(case: TextCase, input: &str, expected: &str) {
+    let mut e = Editor::new(case_fixture("\"", input)).unwrap();
+    let original = e.document().clone();
+    let selection = range((0, 5), (3, 1 + input.len()));
+    e.set_selection(selection).unwrap();
+    e.execute(Command::ConvertCase { selection, case }).unwrap();
+    assert_eq!(e.document(), &case_fixture("\"", expected), "{input}");
+    e.document().validate().unwrap();
+    if input != expected {
+        e.execute(Command::Undo).unwrap();
+        assert_eq!(e.document(), &original);
+        assert_eq!(e.selection(), selection);
+    }
+}

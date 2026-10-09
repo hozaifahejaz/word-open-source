@@ -1,6 +1,6 @@
 # Folio Feature Roadmap Design
 
-**Status:** Approved architecture direction; awaiting review of this written specification before planning implementation.
+**Status:** Approved architecture direction. The user's renewed request to check the whole repo, add functions, polish them and make them work authorizes staged implementation on the previously selected main checkout. Owning-stage design gates for cryptography and online collaboration still apply.
 
 ## Purpose
 

@@ -459,6 +459,9 @@ impl Widget for RecentDocumentButton<'_> {
                 format!("{} — {}", self.name, self.location),
             )
         });
+        if response.gained_focus() {
+            response.scroll_to_me(Some(egui::Align::Center));
+        }
         if ui.is_rect_visible(rect) {
             let visuals = ui.style().interact(&response);
             ui.painter().rect(

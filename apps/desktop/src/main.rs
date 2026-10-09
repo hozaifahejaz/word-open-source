@@ -1138,47 +1138,66 @@ impl FolioApp {
                     "Your opened documents will appear here.",
                 );
             }
-            for recent in self.workspace_state.recent.clone() {
-                let Ok(path) = recent.path.to_path() else {
-                    continue;
-                };
-                let presentation = workspace::recent_document_presentation(&path);
-                ui.push_id(&path, |ui| {
-                    ui.horizontal(|ui| {
-                        let location = if presentation.available {
-                            presentation.location.clone()
-                        } else {
-                            format!("Unavailable • {}", presentation.location)
-                        };
-                        let width = (ui.available_width() - 36.0).clamp(60.0, 300.0);
-                        if ui
-                            .add_enabled(
-                                presentation.available,
-                                RecentDocumentButton {
-                                    name: &presentation.name,
-                                    location: &location,
-                                    width,
-                                },
-                            )
-                            .on_hover_text(path.display().to_string())
-                            .clicked()
-                        {
-                            ui.close();
-                            self.request_open_path(path.clone(), ctx);
-                        }
-                        if ui
-                            .add(
+            self.recent_entries_ui(ui, ctx);
+        });
+    }
+    fn recent_entries_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+    ) -> egui::scroll_area::ScrollAreaOutput<Vec<egui::Id>> {
+        let height =
+            (ctx.screen_rect().bottom() - ui.next_widget_position().y - 16.0).clamp(44.0, 320.0);
+        egui::ScrollArea::vertical()
+            .id_salt("recent_document_entries")
+            .max_height(height)
+            .show(ui, |ui| {
+                let mut controls = Vec::new();
+                for recent in self.workspace_state.recent.clone() {
+                    let Ok(path) = recent.path.to_path() else {
+                        continue;
+                    };
+                    let presentation = workspace::recent_document_presentation(&path);
+                    let row = ui.push_id(&path, |ui| {
+                        ui.horizontal(|ui| {
+                            let location = if presentation.available {
+                                presentation.location.clone()
+                            } else {
+                                format!("Unavailable • {}", presentation.location)
+                            };
+                            let width = (ui.available_width() - 36.0).clamp(60.0, 300.0);
+                            let open = ui
+                                .add_enabled(
+                                    presentation.available,
+                                    RecentDocumentButton {
+                                        name: &presentation.name,
+                                        location: &location,
+                                        width,
+                                    },
+                                )
+                                .on_hover_text(path.display().to_string());
+                            if open.clicked() {
+                                ui.close();
+                                self.request_open_path(path.clone(), ctx);
+                            }
+                            let remove = ui.add(
                                 IconButton::new(Icon::Close, "Remove from recent documents")
                                     .compact(),
-                            )
-                            .clicked()
-                        {
-                            self.workspace_state.remove_recent(&recent.path);
-                        }
+                            );
+                            if remove.gained_focus() {
+                                remove.scroll_to_me(Some(egui::Align::Center));
+                            }
+                            if remove.clicked() {
+                                self.workspace_state.remove_recent(&recent.path);
+                            }
+                            [open.id, remove.id]
+                        })
+                        .inner
                     });
-                });
-            }
-        });
+                    controls.extend(row.inner);
+                }
+                controls
+            })
     }
     fn ribbon(&mut self, ctx: &egui::Context) {
         let frame = egui::Frame::new()
@@ -2460,6 +2479,62 @@ mod app_tests {
         std::fs::create_dir_all(&dir.0).unwrap();
         files::save(&Document::default(), &path, None).unwrap();
         path
+    }
+    #[test]
+    fn twelve_recent_entries_scroll_and_keyboard_focus_reaches_every_control_at_minimum_viewport() {
+        let dir = RecoveryDirectory::new();
+        let mut app = dir.app();
+        for index in 0..12 {
+            let path = lifecycle_file(&dir, &format!("document-{index}.docx"));
+            app.workspace_state
+                .record_recent(StoredPath::from_path(&path).unwrap(), index);
+        }
+        let ctx = egui::Context::default();
+        let mut focused = std::collections::HashSet::new();
+        let mut max_offset: f32 = 0.0;
+        let mut scroll_extent = 0.0;
+        let mut controls = Vec::new();
+        for frame in 0..60 {
+            let events = if frame > 1 && frame % 2 == 0 {
+                vec![key(Key::Tab, egui::Modifiers::NONE)]
+            } else {
+                vec![]
+            };
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(700., 500.))),
+                    time: Some(frame as f64 * 0.5),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::Area::new(egui::Id::new("recent_test_popup"))
+                        .fixed_pos(egui::pos2(24., 170.))
+                        .show(ctx, |ui| {
+                            ui.set_max_width(360.);
+                            let output = app.recent_entries_ui(ui, ctx);
+                            assert!(output.inner_rect.bottom() <= 500.);
+                            assert!(output.inner_rect.height() <= 320.);
+                            max_offset = max_offset.max(output.state.offset.y);
+                            scroll_extent = output.content_size.y - output.inner_rect.height();
+                            controls = output.inner;
+                        });
+                },
+            );
+            if let Some(id) = ctx.memory(|memory| memory.focused()) {
+                focused.insert(id);
+            }
+        }
+        assert_eq!(controls.len(), 24);
+        assert!(
+            controls.iter().all(|id| focused.contains(id)),
+            "all twelve open and remove controls must be reachable"
+        );
+        assert!(scroll_extent > 200., "the test must actually overflow");
+        assert!(
+            max_offset >= scroll_extent - 1.,
+            "keyboard focus must reveal the final row: offset={max_offset}, extent={scroll_extent}"
+        );
     }
     #[test]
     fn preferences_and_caret_share_debounce_and_survive_restart() {

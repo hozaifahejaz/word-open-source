@@ -2,6 +2,21 @@ use serde::{Deserialize, Serialize};
 use std::{error::Error, fmt};
 use unicode_segmentation::UnicodeSegmentation;
 
+/// Literal paragraph-local search controls. Defaults preserve `Document::find` semantics.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SearchOptions {
+    pub match_case: bool,
+    pub whole_words: bool,
+}
+impl Default for SearchOptions {
+    fn default() -> Self {
+        Self {
+            match_case: true,
+            whole_words: false,
+        }
+    }
+}
+
 /// Positions use UTF-8 byte offsets in a paragraph's concatenated text.
 /// Only extended grapheme boundaries are valid editing positions.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -438,20 +453,81 @@ impl Document {
     /// Literal, case-sensitive, non-overlapping matches within paragraphs.
     /// Runs are transparent; paragraph and page breaks are search barriers.
     pub fn find(&self, needle: &str) -> Result<Vec<Selection>, CoreError> {
+        self.find_with_options(needle, SearchOptions::default())
+    }
+    /// Case-insensitive comparison uses Unicode scalar lowercase mappings, not
+    /// locale-specific case folding or normalization. Returned offsets always
+    /// refer to complete graphemes in the original paragraph text.
+    pub fn find_with_options(
+        &self,
+        needle: &str,
+        options: SearchOptions,
+    ) -> Result<Vec<Selection>, CoreError> {
         if needle.is_empty() {
             return Err(CoreError::EmptySearch);
         }
+        let query = if options.match_case {
+            needle.to_owned()
+        } else {
+            lowercase(needle)
+        };
         let mut matches = Vec::new();
         for (block, content) in self.blocks.iter().enumerate() {
-            if let Block::Paragraph(p) = content {
-                for (offset, matched) in p.text().match_indices(needle) {
-                    let end = offset + matched.len();
-                    if p.is_boundary(offset) && p.is_boundary(end) {
-                        matches.push(Selection::new(
-                            Position::new(block, offset),
-                            Position::new(block, end),
-                        ));
-                    }
+            let Block::Paragraph(p) = content else {
+                continue;
+            };
+            let text = p.text();
+            let graphemes: Vec<_> = text
+                .grapheme_indices(true)
+                .map(|(i, _)| i)
+                .chain(std::iter::once(text.len()))
+                .collect();
+            let words: Vec<_> = if options.whole_words {
+                text.split_word_bound_indices()
+                    .map(|(i, _)| i)
+                    .chain(std::iter::once(text.len()))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            // Only scalar endpoints are mapped: an interior byte of a lowercase
+            // expansion has no corresponding original range endpoint.
+            let (search_text, endpoints) = if options.match_case {
+                (text.clone(), Vec::new())
+            } else {
+                let mut lowered = String::new();
+                let mut endpoints = vec![(0, 0)];
+                for (offset, ch) in text.char_indices() {
+                    lowered.extend(ch.to_lowercase());
+                    endpoints.push((lowered.len(), offset + ch.len_utf8()));
+                }
+                (lowered, endpoints)
+            };
+            for (offset, matched) in search_text.match_indices(&query) {
+                let end = offset + matched.len();
+                let (start, end) = if options.match_case {
+                    (offset, end)
+                } else {
+                    let Ok(start) = endpoints.binary_search_by_key(&offset, |&(folded, _)| folded)
+                    else {
+                        continue;
+                    };
+                    let Ok(end) = endpoints.binary_search_by_key(&end, |&(folded, _)| folded)
+                    else {
+                        continue;
+                    };
+                    (endpoints[start].1, endpoints[end].1)
+                };
+                if graphemes.binary_search(&start).is_ok()
+                    && graphemes.binary_search(&end).is_ok()
+                    && (!options.whole_words
+                        || (words.binary_search(&start).is_ok()
+                            && words.binary_search(&end).is_ok()))
+                {
+                    matches.push(Selection::new(
+                        Position::new(block, start),
+                        Position::new(block, end),
+                    ));
                 }
             }
         }
@@ -519,3 +595,7 @@ impl fmt::Display for CoreError {
     }
 }
 impl Error for CoreError {}
+
+fn lowercase(text: &str) -> String {
+    text.chars().flat_map(char::to_lowercase).collect()
+}

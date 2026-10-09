@@ -48,6 +48,7 @@ struct FolioApp {
     search_open: bool,
     focus_search: bool,
     needle: String,
+    search_options: SearchOptions,
     replacement: String,
     focus_canvas: bool,
     reveal: bool,
@@ -95,6 +96,7 @@ impl Default for FolioApp {
             search_open: false,
             focus_search: false,
             needle: String::new(),
+            search_options: SearchOptions::default(),
             replacement: String::new(),
             focus_canvas: true,
             reveal: false,
@@ -1678,7 +1680,7 @@ impl FolioApp {
                         .add(
                             egui::TextEdit::singleline(&mut self.needle)
                                 .id(search_id)
-                                .hint_text("Literal, case-sensitive text")
+                                .hint_text("Find text")
                                 .desired_width(180.0),
                         )
                         .labelled_by(label.id);
@@ -1694,6 +1696,8 @@ impl FolioApp {
                             .desired_width(160.0),
                     )
                     .labelled_by(label.id);
+                    ui.checkbox(&mut self.search_options.match_case, "Match case");
+                    ui.checkbox(&mut self.search_options.whole_words, "Whole words");
                     if ui
                         .add_enabled(
                             !self.needle.is_empty(),
@@ -1707,22 +1711,16 @@ impl FolioApp {
                         .add_enabled(!self.needle.is_empty(), egui::Button::new("Replace"))
                         .clicked()
                     {
-                        if editing::selected_text(&self.editor) == self.needle {
-                            self.execute(Command::ReplaceText {
-                                selection: self.editor.selection(),
-                                text: self.replacement.clone(),
-                                style: None,
-                            });
-                        }
-                        self.find_next();
+                        self.replace_current_match();
                     }
                     if ui
                         .add_enabled(!self.needle.is_empty(), egui::Button::new("Replace all"))
                         .clicked()
                     {
-                        match self.editor.execute(Command::ReplaceAll {
+                        match self.editor.execute(Command::ReplaceAllWithOptions {
                             needle: self.needle.clone(),
                             replacement: self.replacement.clone(),
+                            options: self.search_options,
                         }) {
                             Ok(result) => {
                                 self.notice = format!("{} replacements", result.replacements);
@@ -1738,18 +1736,73 @@ impl FolioApp {
                         self.focus_canvas = true;
                     }
                 });
+                // Derive results from the current document/query on every search
+                // frame, including edits made through the canvas or MCP bridge.
+                let matches = self.search_matches().unwrap_or_default();
+                let current = matches.iter().position(|s| s.ordered() == self.editor.selection().ordered());
+                ui.label(format!("{} of {}", current.map_or(0, |i| i + 1), matches.len()));
+                egui::ScrollArea::vertical()
+                    .id_salt("find-results")
+                    .max_height(96.0)
+                    .show(ui, |ui| {
+                        for (index, selection) in matches.iter().enumerate() {
+                            use unicode_segmentation::UnicodeSegmentation;
+                            let text = self.editor.document().paragraph(selection.anchor.block).unwrap().text();
+                            let preview: String = text.graphemes(true).take(80).collect();
+                            let label = format!("{}. Paragraph {}: {}", index + 1, selection.anchor.block + 1, preview);
+                            let response = ui.selectable_label(current == Some(index), label);
+                            if response.clicked() {
+                                self.select_search_match(*selection);
+                                ctx.request_repaint();
+                            }
+                        }
+                    });
             }
         });
     }
+    fn search_matches(&self) -> Result<Vec<Selection>, CoreError> {
+        self.editor
+            .document()
+            .find_with_options(&self.needle, self.search_options)
+    }
+    fn select_search_match(&mut self, selection: Selection) {
+        if let Err(error) = self.editor.set_selection(selection) {
+            self.error = Some(error.to_string());
+            return;
+        }
+        self.typing = None;
+        self.visual_line = None;
+        self.preferred_x = None;
+        self.reveal = true;
+        self.focus_canvas = true;
+    }
+    fn replace_current_match(&mut self) {
+        match self.search_matches() {
+            Ok(matches) => {
+                if matches
+                    .iter()
+                    .any(|s| s.ordered() == self.editor.selection().ordered())
+                {
+                    self.execute(Command::ReplaceText {
+                        selection: self.editor.selection(),
+                        text: self.replacement.clone(),
+                        style: None,
+                    });
+                    if self.error.is_some() {
+                        return;
+                    }
+                }
+                self.find_next();
+            }
+            Err(error) => self.error = Some(error.to_string()),
+        }
+    }
     fn find_next(&mut self) {
-        match self.editor.document().find(&self.needle) {
+        match self.search_matches() {
             Ok(matches) => {
                 let end = self.editor.selection().ordered().1;
                 if let Some(s) = matches.iter().find(|s| s.anchor >= end).or(matches.first()) {
-                    self.editor.set_selection(*s).unwrap();
-                    self.typing = None;
-                    self.reveal = true;
-                    self.focus_canvas = true;
+                    self.select_search_match(*s);
                     self.notice = format!("{} matches", matches.len());
                 } else {
                     self.notice = "No matches".into();
@@ -4171,6 +4224,166 @@ mod app_tests {
             repeat: false,
             modifiers,
         }
+    }
+    fn search_text_position(output: &egui::FullOutput, label: &str) -> egui::Pos2 {
+        output
+            .shapes
+            .iter()
+            .find_map(|shape| {
+                if let egui::Shape::Text(text) = &shape.shape
+                    && text.galley.job.text == label
+                {
+                    Some(text.pos + text.galley.size() * 0.5)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| panic!("missing search control or result: {label}"))
+    }
+    fn click_search_text(app: &mut FolioApp, ctx: &egui::Context, label: &str) -> bool {
+        frame(app, ctx, vec![]);
+        let output = frame(app, ctx, vec![]);
+        let pos = search_text_position(&output, label);
+        let mut requested_reveal = false;
+        for pressed in [true, false] {
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(1180.0, 850.0),
+                )),
+                events: vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                ..Default::default()
+            });
+            app.global_shortcuts(ctx);
+            app.ribbon(ctx);
+            requested_reveal = app.reveal;
+            app.canvas(ctx);
+            let _ = ctx.end_pass();
+        }
+        requested_reveal
+    }
+    #[test]
+    fn search_options_refresh_and_results_navigate_through_egui() {
+        let ctx = egui::Context::default();
+        layout::install_fonts(&ctx);
+        let mut app = FolioApp {
+            search_open: true,
+            needle: "cat".into(),
+            ..Default::default()
+        };
+        app.insert("Cat cat scatter CAT\ntail cat".into());
+        app.editor.mark_saved();
+        let original = app.editor.document().clone();
+        frame(&mut app, &ctx, vec![]);
+        let output = frame(&mut app, &ctx, vec![]);
+        search_text_position(&output, "0 of 3");
+        click_search_text(&mut app, &ctx, "Whole words");
+        search_text_position(&frame(&mut app, &ctx, vec![]), "0 of 2");
+        click_search_text(&mut app, &ctx, "Match case");
+        search_text_position(&frame(&mut app, &ctx, vec![]), "0 of 4");
+        assert!(
+            click_search_text(&mut app, &ctx, "3. Paragraph 1: Cat cat scatter CAT"),
+            "clicking a result must request canvas reveal"
+        );
+        assert_eq!(
+            app.editor.selection(),
+            Selection::new(Position::new(0, 16), Position::new(0, 19))
+        );
+        search_text_position(&frame(&mut app, &ctx, vec![]), "3 of 4");
+        click_search_text(&mut app, &ctx, "Find next");
+        assert_eq!(
+            app.editor.selection(),
+            Selection::new(Position::new(1, 5), Position::new(1, 8))
+        );
+        click_search_text(&mut app, &ctx, "Find next");
+        assert_eq!(
+            app.editor.selection(),
+            Selection::new(Position::new(0, 0), Position::new(0, 3))
+        );
+        assert_eq!(app.editor.document(), &original);
+        assert!(!app.editor.is_dirty());
+        // Changing the query from the actual focused field refreshes the list.
+        app.focus_search = true;
+        frame(&mut app, &ctx, vec![]);
+        frame(
+            &mut app,
+            &ctx,
+            vec![
+                key(
+                    Key::A,
+                    egui::Modifiers {
+                        command: true,
+                        mac_cmd: true,
+                        ..Default::default()
+                    },
+                ),
+                egui::Event::Text("tail".into()),
+            ],
+        );
+        search_text_position(&frame(&mut app, &ctx, vec![]), "0 of 1");
+        assert!(ctx.memory(|m| m.has_focus(egui::Id::new("find-input"))));
+        assert_eq!(app.editor.document(), &original);
+    }
+    #[test]
+    fn search_replacement_honors_options_and_rejects_nonmatch_selection() {
+        let ctx = egui::Context::default();
+        layout::install_fonts(&ctx);
+        let protected = PathBuf::from("protected-original.docx");
+        let mut app = FolioApp {
+            search_open: true,
+            needle: "cat".into(),
+            replacement: "dog".into(),
+            protected: Some(protected.clone()),
+            ..Default::default()
+        };
+        app.insert("Cat scatter cat CAT".into());
+        app.editor.mark_saved();
+        let original = app.editor.document().clone();
+        click_search_text(&mut app, &ctx, "Whole words");
+        click_search_text(&mut app, &ctx, "Match case");
+        app.editor
+            .set_selection(Selection::new(Position::new(0, 5), Position::new(0, 8)))
+            .unwrap();
+        click_search_text(&mut app, &ctx, "Replace");
+        assert_eq!(app.editor.document(), &original);
+        click_search_text(&mut app, &ctx, "Replace");
+        assert_eq!(
+            app.editor.document().paragraph(0).unwrap().text(),
+            "Cat scatter dog CAT"
+        );
+        app.editor.execute(Command::Undo).unwrap();
+        // Reversed uppercase selection is still the exact current-query range.
+        app.editor
+            .set_selection(Selection::new(Position::new(0, 19), Position::new(0, 16)))
+            .unwrap();
+        click_search_text(&mut app, &ctx, "Replace");
+        assert_eq!(
+            app.editor.document().paragraph(0).unwrap().text(),
+            "Cat scatter cat dog"
+        );
+        app.editor.execute(Command::Undo).unwrap();
+        click_search_text(&mut app, &ctx, "Replace all");
+        assert_eq!(
+            app.editor.document().paragraph(0).unwrap().text(),
+            "dog scatter dog dog"
+        );
+        search_text_position(&frame(&mut app, &ctx, vec![]), "0 of 0");
+        app.editor.execute(Command::Undo).unwrap();
+        assert_eq!(app.editor.document(), &original);
+        assert!(!app.editor.is_dirty());
+        assert_eq!(app.protected, Some(protected));
+        app.needle.clear();
+        click_search_text(&mut app, &ctx, "Replace");
+        click_search_text(&mut app, &ctx, "Replace all");
+        assert_eq!(app.editor.document(), &original);
     }
     #[test]
     fn command_f_focuses_search_and_typing_preserves_document_and_selection() {

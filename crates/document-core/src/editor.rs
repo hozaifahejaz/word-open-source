@@ -43,6 +43,11 @@ pub enum Command {
         needle: String,
         replacement: String,
     },
+    ReplaceAllWithOptions {
+        needle: String,
+        replacement: String,
+        options: SearchOptions,
+    },
     Undo,
     Redo,
 }
@@ -295,7 +300,22 @@ fn apply_command(
             needle,
             replacement,
         } => {
-            let matches = doc.find(&needle)?;
+            return apply_command(
+                doc,
+                current,
+                Command::ReplaceAllWithOptions {
+                    needle,
+                    replacement,
+                    options: SearchOptions::default(),
+                },
+            );
+        }
+        Command::ReplaceAllWithOptions {
+            needle,
+            replacement,
+            options,
+        } => {
+            let matches = doc.find_with_options(&needle, options)?;
             replacements = matches.len();
             let mut caret = current;
             for selection in matches.into_iter().rev() {

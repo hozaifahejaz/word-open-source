@@ -5,6 +5,39 @@ Available host: Apple Silicon arm64, macOS **27.0 (26A428)**, Apple clang
 21.0.0, Rust **1.90.0**. Windows and Linux were not executed locally.
 This report records scoped evidence, not full Word parity or a release certification.
 
+## Search increment — 2026-10-10
+
+Task 1 adds Match case, Unicode whole words, the visible current-result counter,
+a compact selectable result list, and option-aware Find next / Replace / Replace
+all. Verification uses the real egui ribbon and document canvas with pointer and
+keyboard events, not mocked widgets. No native bundle smoke, Windows/Linux GUI
+run, release packaging, or external Word/LibreOffice verification was performed
+for this increment; earlier native evidence below remains historical.
+
+| Automated check | Observed result |
+| --- | --- |
+| `cargo fmt --all -- --check` | PASS, exit 0 |
+| `cargo test --workspace --offline --locked` | PASS: 27 core commands + 5 core recovery + 87 desktop + 23 DOCX = 142 passed; 0 failed; one manual desktop benchmark ignored |
+| `cargo clippy --workspace --all-targets --offline --locked -- -D warnings` | PASS, exit 0 |
+
+Focused tests cover legacy literal case-sensitive compatibility, Unicode lowercase
+expansion (`İ` ↔ `i` + combining dot), rejected partial expansions/graphemes,
+UAX #29 word boundaries around accented letters, combining marks, digits,
+apostrophes and underscores, cross-run matching and paragraph/page barriers.
+Option-aware replacement covers original byte offsets, multiline replacements,
+single-step Undo, empty/invalid-input atomicity, and preserved selection/history.
+Real egui checks toggle both options, change the focused query, click a result
+and request canvas reveal, wrap Find next, reject a selected substring excluded
+by Whole words, replace a reversed uppercase match, refresh after Replace all,
+and preserve the protected-source path. Existing workspace/source-protection
+regressions pass in the full suite. MCP continues using the original literal
+case-sensitive command. Regex search is deferred.
+
+An initial full test run passed with one test-helper `unused_must_use` warning;
+the initial clippy run rejected that warning. Explicitly consuming the egui pass
+output resolved it; the final full suite and clippy run above have no warnings.
+Logs: `build/validation/search-task-1-tests.log` (ignored local artifact).
+
 ## Workspace/recovery increment — 2026-10-10
 
 Host: macOS **27.0 (26A428)**, arm64, Rust **1.90.0**

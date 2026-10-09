@@ -574,3 +574,181 @@ fn navigation_uses_whole_extended_graphemes_across_runs() {
     assert_eq!(p.char_index_from_byte(3), Ok(2));
     assert_eq!(p.byte_from_char_index(1), Err(CoreError::InvalidPosition));
 }
+
+#[test]
+fn search_options_preserve_literal_case_sensitive_compatibility() {
+    let d = editor(&["Cat cat .* .*", "cat"]).document().clone();
+    assert_eq!(
+        d.find("cat").unwrap(),
+        vec![range((0, 4), (0, 7)), range((1, 0), (1, 3))]
+    );
+    assert_eq!(
+        d.find_with_options("cat", SearchOptions::default())
+            .unwrap(),
+        d.find("cat").unwrap()
+    );
+    assert_eq!(
+        d.find_with_options(
+            ".*",
+            SearchOptions {
+                match_case: false,
+                whole_words: false
+            }
+        )
+        .unwrap(),
+        vec![range((0, 8), (0, 10)), range((0, 11), (0, 13))]
+    );
+    assert_eq!(
+        d.find_with_options("", SearchOptions::default()),
+        Err(CoreError::EmptySearch)
+    );
+}
+#[test]
+fn insensitive_search_maps_unicode_lowercase_expansion_to_original_ranges() {
+    let d = editor(&["İ i\u{307} I i CAFÉ café"]).document().clone();
+    let options = SearchOptions {
+        match_case: false,
+        whole_words: false,
+    };
+    assert_eq!(
+        d.find_with_options("İ", options).unwrap(),
+        vec![range((0, 0), (0, 2)), range((0, 3), (0, 6))]
+    );
+    // Partial lowercase expansions and combining graphemes cannot become selections.
+    assert_eq!(
+        d.find_with_options("i", options).unwrap(),
+        vec![range((0, 7), (0, 8)), range((0, 9), (0, 10))]
+    );
+    assert!(d.find_with_options("\u{307}", options).unwrap().is_empty());
+    assert_eq!(
+        d.find_with_options("café", options).unwrap(),
+        vec![range((0, 11), (0, 16)), range((0, 17), (0, 22))]
+    );
+}
+#[test]
+fn whole_word_search_uses_unicode_words_in_original_text() {
+    let d = editor(&[
+        "é élan aé é2 2é é\u{301} é-猫 猫 猫2",
+        "can't can 123 123a 123_4",
+    ])
+    .document()
+    .clone();
+    let options = SearchOptions {
+        match_case: false,
+        whole_words: true,
+    };
+    assert_eq!(
+        d.find_with_options("é", options).unwrap(),
+        vec![range((0, 0), (0, 2)), range((0, 26), (0, 28))]
+    );
+    assert_eq!(
+        d.find_with_options("é\u{301}", options).unwrap(),
+        vec![range((0, 21), (0, 25))]
+    );
+    assert_eq!(
+        d.find_with_options("can", options).unwrap(),
+        vec![range((1, 6), (1, 9))]
+    );
+    assert_eq!(
+        d.find_with_options("123", options).unwrap(),
+        vec![range((1, 10), (1, 13))]
+    );
+}
+#[test]
+fn option_search_remains_grapheme_safe_and_cross_run_paragraph_local() {
+    let d = Document {
+        blocks: vec![
+            Block::Paragraph(Paragraph {
+                runs: vec![
+                    Run::new("C", TextStyle::default()),
+                    Run::new(
+                        "AT E\u{301} 👩‍👩‍👧‍👦",
+                        TextStyle {
+                            bold: true,
+                            ..Default::default()
+                        },
+                    ),
+                ],
+                ..Default::default()
+            }),
+            Block::PageBreak,
+            Block::Paragraph(Paragraph::plain("CAT")),
+        ],
+        ..Default::default()
+    };
+    let options = SearchOptions {
+        match_case: false,
+        whole_words: false,
+    };
+    assert_eq!(
+        d.find_with_options("cat", options).unwrap(),
+        vec![range((0, 0), (0, 3)), range((2, 0), (2, 3))]
+    );
+    assert!(d.find_with_options("e", options).unwrap().is_empty());
+    assert!(d.find_with_options("👩", options).unwrap().is_empty());
+    assert!(d.find_with_options("cat\ncat", options).unwrap().is_empty());
+}
+#[test]
+fn options_replace_all_is_atomic_and_one_undo_step_with_original_offsets() {
+    let mut e = editor(&["İ i\u{307} İ2", "İ"]);
+    let original = e.document().clone();
+    let selection = range((1, 0), (1, 2));
+    e.set_selection(selection).unwrap();
+    let result = e
+        .execute(Command::ReplaceAllWithOptions {
+            needle: "İ".into(),
+            replacement: "İX\nY".into(),
+            options: SearchOptions {
+                match_case: false,
+                whole_words: true,
+            },
+        })
+        .unwrap();
+    assert_eq!(result.replacements, 3);
+    assert_eq!(
+        (0..5).map(|block| text(&e, block)).collect::<Vec<_>>(),
+        vec!["İX", "Y İX", "Y İ2", "İX", "Y"]
+    );
+    e.execute(Command::Undo).unwrap();
+    assert_eq!(e.document(), &original);
+    assert_eq!(e.selection(), selection);
+    assert!(!e.can_undo() && !e.is_dirty());
+    assert!(e.can_redo());
+    for needle in ["", "İ"] {
+        let replacement = if needle.is_empty() {
+            "valid"
+        } else {
+            "bad\u{000c}text"
+        };
+        assert_eq!(
+            e.execute(Command::ReplaceAllWithOptions {
+                needle: needle.into(),
+                replacement: replacement.into(),
+                options: SearchOptions {
+                    match_case: false,
+                    whole_words: true
+                }
+            }),
+            Err(if needle.is_empty() {
+                CoreError::EmptySearch
+            } else {
+                CoreError::InvalidText
+            })
+        );
+        assert_eq!(e.document(), &original);
+        assert_eq!(e.selection(), selection);
+        assert!(e.can_redo());
+        assert!(!e.can_undo());
+    }
+    let result = e
+        .execute(Command::ReplaceAll {
+            needle: "İ".into(),
+            replacement: "x".into(),
+        })
+        .unwrap();
+    assert_eq!(result.replacements, 3);
+    assert_eq!(
+        (text(&e, 0), text(&e, 1)),
+        ("x i\u{307} x2".into(), "x".into())
+    );
+}

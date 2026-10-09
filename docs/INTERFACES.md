@@ -71,7 +71,8 @@ caret at the first paragraph. `document()` is read-only; mutations use
 | `InsertPageBreak { at }` | Produce left paragraph, structural break, right paragraph |
 | `ReplaceWithPageBreak { selection }` | Replace the range with a structural break in one transaction |
 | `SetPageLayout { layout }` | Change document-wide settings |
-| `ReplaceAll { needle, replacement }` | Replace original literal matches atomically, in one history step |
+| `ReplaceAll { needle, replacement }` | Replace original literal case-sensitive matches atomically, in one history step |
+| `ReplaceAllWithOptions { needle, replacement, options }` | Replace original option-aware matches atomically, in one history step |
 | `Undo` / `Redo` | Restore content and recorded selection together |
 
 Insert/replace normalize CRLF and CR to LF and split LF into paragraphs; form
@@ -101,9 +102,15 @@ their captured snapshot before marking the current document saved.
 
 `Document::find(needle)` returns forward, literal, case-sensitive, non-overlapping
 matches. Runs are transparent; paragraphs and page breaks are barriers. Empty
-needles are errors; matches splitting graphemes are excluded. No regex, Unicode
-normalization, case folding or whole-word search is implemented. Replace-all
-does not rescan replacement text.
+needles return `CoreError::EmptySearch`; matches splitting graphemes are excluded.
+`Document::find_with_options(needle, SearchOptions { match_case, whole_words })`
+uses the same matching/range contract. Defaults are `match_case: true` and
+`whole_words: false`. Insensitive comparison uses Unicode scalar lowercase
+mappings and maps complete matches back to original grapheme boundaries; partial
+lowercase expansions are excluded. Whole words uses UAX #29 boundaries in the
+original paragraph. Regex, Unicode normalization and locale-specific/full case
+folding remain deferred. Both replace-all commands use the original matches and
+do not rescan replacement text. Existing MCP callers retain `ReplaceAll` behavior.
 
 ```rust
 use document_core::{Command, Editor, Position};

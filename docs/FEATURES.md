@@ -40,7 +40,7 @@ and build; published help scopes are recorded below without invented build numbe
 | Paragraphs/styled text | Supported | Bold/italic/underline, family/size/RGB; native rich-text canvas with font fallback | Create document; ECMA Part 1 |
 | Selection/editing | Supported | Grapheme-safe commands, selection, history, visual navigation; IME event support, OS verification limited | Design/edit; contracts |
 | Editing toolbar/statistics | Supported | Labeled original icons, plain-text Cut/Copy/Paste, clear text formatting; document/selection whitespace-word and grapheme counts | Desktop guide |
-| Find/replace | Supported | Literal case-sensitive paragraph-local, cross-run search; advanced modes deferred | Design/edit; contracts |
+| Find/replace | Supported | Literal paragraph-local, cross-run search; optional Unicode lowercase comparison and UAX #29 whole words; result navigation/counter; regex deferred | Design/edit; contracts |
 | Alignment/spacing | Supported | Four alignments; before/after and multiple/exact/at-least spacing; indent/tab stops deferred | Desktop/web; ECMA Part 1 |
 | Page settings/breaks | Supported | One size/orientation/margin set and explicit breaks; automatic/explicit pagination implemented | Desktop/web; ECMA Part 1 |
 | Local workspace | Supported | File-tab Recent Documents (12 unique paths), unavailable-entry removal, per-document caret, remembered light/dark appearance and zoom | [Acceptance evidence](ACCEPTANCE.md) |
@@ -68,6 +68,22 @@ Folio does not bundle Word branding, templates or assets. Use original fixtures
 and record supported elements, approximations and rejected features explicitly.
 Unknown imported content must warn rather than quietly disappear on save.
 Update statuses after implementation; planned work is not supported behavior.
+
+## Search increment — 2026-10-10
+
+Find / Replace provides Match case (enabled by default), Whole words, a current
+result counter, and a compact scrollable list that selects and reveals matches.
+Find next wraps through the current query's matches; Replace accepts only a
+selection whose range is a current match, and Replace all is one undoable command.
+Changing the query/options or editing the document refreshes the results. Empty
+queries disable replacement and remain rejected by the core search commands.
+
+Insensitive matching compares Unicode scalar lowercase mappings and maps results
+back to original grapheme boundaries, including lowercase expansions. It does not
+perform locale-specific case folding or Unicode normalization. Whole words uses
+UAX #29 boundaries in the original paragraph. Paragraph/page breaks remain search
+barriers. Existing core `Document::find`, `Command::ReplaceAll`, and MCP replacement
+retain literal case-sensitive behavior. Regex search remains **Deferred**.
 
 ## Workspace/recovery increment — 2026-10-10
 

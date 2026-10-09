@@ -49,6 +49,7 @@ struct FolioApp {
     focus_search: bool,
     needle: String,
     search_options: SearchOptions,
+    search_result_focus: Option<(egui::Id, usize)>,
     replacement: String,
     focus_canvas: bool,
     reveal: bool,
@@ -97,6 +98,7 @@ impl Default for FolioApp {
             focus_search: false,
             needle: String::new(),
             search_options: SearchOptions::default(),
+            search_result_focus: None,
             replacement: String::new(),
             focus_canvas: true,
             reveal: false,
@@ -649,15 +651,13 @@ impl FolioApp {
             style: self.typing.clone(),
         });
     }
-    fn change_case(&mut self, case: editing::TextCase) {
+    fn change_case(&mut self, case: TextCase) {
         if self.editor.selection().is_collapsed() {
             return;
         }
-        let text = editing::transform_case(&editing::selected_text(&self.editor), case);
-        self.execute(Command::ReplaceText {
+        self.execute(Command::ConvertCase {
             selection: self.editor.selection(),
-            text,
-            style: None,
+            case,
         });
         self.typing = None;
         self.focus_canvas = true;
@@ -665,10 +665,10 @@ impl FolioApp {
     fn writing_tools_ui(&mut self, ui: &mut egui::Ui) {
         let menu = ui.menu_button("Aa", |ui| {
             for (label, case) in [
-                ("UPPERCASE", editing::TextCase::Upper),
-                ("lowercase", editing::TextCase::Lower),
-                ("Title case", editing::TextCase::Title),
-                ("Sentence case", editing::TextCase::Sentence),
+                ("UPPERCASE", TextCase::Upper),
+                ("lowercase", TextCase::Lower),
+                ("Title case", TextCase::Title),
+                ("Sentence case", TextCase::Sentence),
             ] {
                 if ui
                     .add_enabled(
@@ -1802,12 +1802,40 @@ impl FolioApp {
                 // Derive results from the current document/query on every search
                 // frame, including edits made through the canvas or MCP bridge.
                 let matches = self.search_matches().unwrap_or_default();
+                let mut navigate = None;
+                if let Some((id, index)) = self.search_result_focus
+                    && !matches.is_empty()
+                    && ctx.memory(|m| m.has_focus(id) || m.had_focus_last_frame(id))
+                {
+                    let index = index.min(matches.len() - 1);
+                    ctx.input_mut(|input| {
+                        for (key, destination) in [
+                            (Key::ArrowUp, index.saturating_sub(1)),
+                            (Key::ArrowDown, (index + 1).min(matches.len() - 1)),
+                            (Key::Home, 0),
+                            (Key::End, matches.len() - 1),
+                        ] {
+                            if input.consume_key(egui::Modifiers::NONE, key) {
+                                navigate = Some(destination);
+                            }
+                        }
+                    });
+                    if let Some(destination) = navigate {
+                        self.select_search_match(matches[destination]);
+                        // Navigation keeps focus in the list; Enter/click returns to canvas.
+                        self.focus_canvas = false;
+                    }
+                }
                 let current = matches.iter().position(|s| s.ordered() == self.editor.selection().ordered());
                 ui.label(format!("{} of {}", current.map_or(0, |i| i + 1), matches.len()));
                 let row_height = ui.spacing().interact_size.y;
-                egui::ScrollArea::vertical()
+                let mut results = egui::ScrollArea::vertical()
                     .id_salt("find-results")
-                    .max_height(96.0)
+                    .max_height(96.0);
+                if let Some(destination) = navigate {
+                    results = results.vertical_scroll_offset(destination as f32 * (row_height + ui.spacing().item_spacing.y));
+                }
+                results
                     .show_rows(ui, row_height, matches.len(), |ui, rows| {
                         // Only visible rows build widgets; each visible paragraph
                         // is concatenated and abbreviated once per result frame.
@@ -1820,10 +1848,27 @@ impl FolioApp {
                                 text.graphemes(true).take(80).collect::<String>()
                             });
                             let label = format!("{}. Paragraph {}: {}", index + 1, selection.anchor.block + 1, preview);
-                            let response = ui.add_sized(
-                                Vec2::new(ui.available_width(), row_height),
-                                egui::Button::selectable(current == Some(index), label).truncate(),
-                            );
+                            let response = ui.push_id(("find-result", index), |ui| {
+                                ui.add_sized(
+                                    Vec2::new(ui.available_width(), row_height),
+                                    egui::Button::selectable(current == Some(index), label).truncate(),
+                                )
+                            }).inner;
+                            if navigate == Some(index) {
+                                response.request_focus();
+                                response.scroll_to_me(None);
+                            }
+                            if response.gained_focus() || navigate == Some(index) {
+                                // egui installs the focus filter on the following pass.
+                                ctx.request_repaint();
+                            }
+                            if response.has_focus() || navigate == Some(index) {
+                                self.search_result_focus = Some((response.id, index));
+                                ctx.memory_mut(|m| m.set_focus_lock_filter(response.id, egui::EventFilter {
+                                    vertical_arrows: true,
+                                    ..Default::default()
+                                }));
+                            }
                             if response.clicked() {
                                 self.select_search_match(selection);
                                 ctx.request_repaint();
@@ -4601,6 +4646,96 @@ mod app_tests {
             app.editor.document().paragraph(0).unwrap().text(),
             "keep❤️!"
         );
+    }
+
+    #[test]
+    fn search_results_keyboard_reaches_offscreen_rows_and_activates() {
+        let ctx = egui::Context::default();
+        layout::install_fonts(&ctx);
+        ctx.enable_accesskit();
+        let mut app = FolioApp {
+            search_open: true,
+            focus_search: true,
+            focus_canvas: false,
+            needle: "hit".into(),
+            ..Default::default()
+        };
+        app.insert("hit ".repeat(200));
+        app.editor.mark_saved();
+        let original = app.editor.document().clone();
+        frame(&mut app, &ctx, vec![]);
+        let mut entered = false;
+        for _ in 0..100 {
+            let output = frame(&mut app, &ctx, vec![key(Key::Tab, Default::default())]);
+            let update = output.platform_output.accesskit_update.as_ref().unwrap();
+            if update.nodes.iter().any(|(id, node)| {
+                *id == update.focus
+                    && node
+                        .label()
+                        .is_some_and(|label| label.starts_with("1. Paragraph 1: "))
+            }) {
+                entered = true;
+                break;
+            }
+        }
+        assert!(entered, "Tab must enter the real result list");
+        frame(&mut app, &ctx, vec![]);
+        for (navigation, index) in [
+            (Key::ArrowDown, 1),
+            (Key::End, 199),
+            (Key::ArrowUp, 198),
+            (Key::Home, 0),
+            (Key::End, 199),
+        ] {
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(1180.0, 850.0),
+                )),
+                events: vec![key(navigation, Default::default())],
+                ..Default::default()
+            });
+            app.global_shortcuts(&ctx);
+            app.ribbon(&ctx);
+            assert_eq!(
+                app.editor.selection(),
+                Selection::new(Position::new(0, index * 4), Position::new(0, index * 4 + 3))
+            );
+            assert!(app.reveal, "keyboard navigation must request canvas reveal");
+            app.canvas(&ctx);
+            let _ = ctx.end_pass();
+            let output = frame(&mut app, &ctx, vec![]);
+            let update = output.platform_output.accesskit_update.as_ref().unwrap();
+            let prefix = format!("{}. Paragraph 1: ", index + 1);
+            assert!(
+                update.nodes.iter().any(|(id, node)| *id == update.focus
+                    && node.label().is_some_and(|label| label.starts_with(&prefix))),
+                "destination row must be visible and focused after {navigation:?}"
+            );
+            search_text_position(&output, &format!("{} of 200", index + 1));
+        }
+        app.reveal = false;
+        ctx.begin_pass(egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(
+                egui::Pos2::ZERO,
+                Vec2::new(1180.0, 850.0),
+            )),
+            events: vec![key(Key::Enter, Default::default())],
+            ..Default::default()
+        });
+        app.global_shortcuts(&ctx);
+        app.ribbon(&ctx);
+        assert!(app.reveal, "Enter activates the offscreen destination");
+        assert!(app.focus_canvas);
+        app.canvas(&ctx);
+        let _ = ctx.end_pass();
+        assert!(ctx.memory(|m| m.has_focus(egui::Id::new("document-canvas"))));
+        assert_eq!(
+            app.editor.selection(),
+            Selection::new(Position::new(0, 796), Position::new(0, 799))
+        );
+        assert_eq!(app.editor.document(), &original);
+        assert!(!app.editor.is_dirty());
     }
 
     #[test]

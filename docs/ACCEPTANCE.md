@@ -40,6 +40,35 @@ Log: `build/validation/writing-tools-task-2-tests.log` (ignored local artifact).
 Date/time insertion, custom replacements and emoji search are deferred. Existing
 emoji glyph fidelity and native accessibility limits below remain outstanding.
 
+## Whole-branch preservation and keyboard fixes — 2026-10-10
+
+The Aa actions now execute the UI-independent `Command::ConvertCase`. Core
+regressions compare exact documents across styled runs, two paragraphs with
+distinct paragraph/default styles, an empty paragraph and an explicit page break.
+Uppercase/lowercase expansions retain their source styles; Undo restores the
+original reversed selection and clean document, and Redo restores the transformed
+caret. An already-uppercase selection preserves all content/metadata and adds no
+dirty state or history.
+
+A real egui test enters a virtualized 200-result list with Tab, moves with
+Up/Down and Home/End, and reaches result 200 beyond the initial viewport.
+Navigation selects the original range, updates the counter, requests canvas
+reveal, scrolls the destination into view and transfers row focus. Enter activates
+that row and returns focus to the canvas without modifying document text.
+Existing mouse-selection and viewport-only rendering tests remain passing.
+
+The regressions were observed failing before implementation: the original case
+path flattened styles and removed the page break, including unchanged text;
+keyboard arrows left the selection at the document end instead of the next row.
+Final verification passed: `cargo test --workspace --offline --locked` ran 152
+tests (31 core commands, 5 recovery, 93 desktop and 23 DOCX), with zero failures
+and one existing manual cold-layout benchmark ignored. `cargo fmt --all -- --check`
+and `cargo clippy --workspace --all-targets --offline --locked -- -D warnings` both
+exited 0. Detailed verification logs are recorded in
+`build/validation/whole-branch-fix-*.log` (ignored local artifacts). Native OS and
+screen-reader behavior was not reverified; regex, date/time and the broader
+backlog remain deferred.
+
 ## Search increment — 2026-10-10
 
 Task 1 adds Match case, Unicode whole words, the visible current-result counter,

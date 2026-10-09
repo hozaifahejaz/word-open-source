@@ -109,53 +109,6 @@ pub fn selected_text(editor: &Editor) -> String {
     result
 }
 
-#[derive(Clone, Copy)]
-pub enum TextCase {
-    Upper,
-    Lower,
-    Title,
-    Sentence,
-}
-
-pub fn transform_case(text: &str, case: TextCase) -> String {
-    match case {
-        TextCase::Upper => text.to_uppercase(),
-        TextCase::Lower => text.to_lowercase(),
-        TextCase::Title => {
-            let mut result = String::with_capacity(text.len());
-            for token in text.split_inclusive(char::is_whitespace) {
-                let first = token.graphemes(true).next().unwrap();
-                result.push_str(&first.to_uppercase());
-                result.push_str(&token[first.len()..].to_lowercase());
-            }
-            result
-        }
-        TextCase::Sentence => {
-            let lower = text.to_lowercase();
-            let mut result = String::with_capacity(lower.len());
-            let mut capitalize = true;
-            let mut after_terminal = false;
-            for grapheme in lower.graphemes(true) {
-                if grapheme.chars().all(char::is_whitespace) {
-                    result.push_str(grapheme);
-                    if after_terminal {
-                        capitalize = true;
-                    }
-                } else {
-                    if capitalize {
-                        result.push_str(&grapheme.to_uppercase());
-                    } else {
-                        result.push_str(grapheme);
-                    }
-                    capitalize = false;
-                }
-                after_terminal = matches!(grapheme, "." | "?" | "!");
-            }
-            result
-        }
-    }
-}
-
 /// Visible labels and spoken action names accompany the exact inserted sequences.
 pub const SYMBOLS: &[(&str, &str, &str)] = &[
     ("Nonbreaking space", "Insert nonbreaking space", "\u{00a0}"),

@@ -13,6 +13,10 @@ pub enum Command {
         text: String,
         style: Option<TextStyle>,
     },
+    ConvertCase {
+        selection: Selection,
+        case: TextCase,
+    },
     Delete {
         selection: Selection,
     },
@@ -225,6 +229,7 @@ fn apply_command(
             text,
             style,
         } => replace(doc, selection, &text, style)?,
+        Command::ConvertCase { selection, case } => convert_case(doc, selection, case)?,
         Command::Delete { selection } => replace(doc, selection, "", None)?,
         Command::SplitParagraph { at } => replace(doc, Selection::caret(at), "\n", None)?,
         Command::JoinParagraph { block } => {
@@ -439,4 +444,64 @@ fn replace_validated(
     doc.blocks.splice(start.block..=end.block, blocks);
     let caret_offset = doc.paragraph(caret_block)?.snap_forward(caret_offset);
     Ok(Selection::caret(Position::new(caret_block, caret_offset)))
+}
+
+fn convert_case(
+    doc: &mut Document,
+    selection: Selection,
+    case: TextCase,
+) -> Result<Selection, CoreError> {
+    doc.validate_selection(selection)?;
+    let (start, end) = selection.ordered();
+    if start == end {
+        return Ok(selection);
+    }
+    let mut ranges = Vec::new();
+    let mut text = String::new();
+    for block in start.block..=end.block {
+        if let Block::Paragraph(p) = &doc.blocks[block] {
+            let from = if block == start.block {
+                start.offset
+            } else {
+                0
+            };
+            let to = if block == end.block {
+                end.offset
+            } else {
+                p.len_bytes()
+            };
+            if !ranges.is_empty() {
+                text.push('\n');
+            }
+            text.push_str(&p.text()[from..to]);
+            ranges.push((block, from, to));
+        }
+    }
+    let mut mappings = crate::case::case_mappings(&text, case).into_iter();
+    let mut caret = end;
+    for (index, (block, from, to)) in ranges.into_iter().enumerate() {
+        if index > 0 {
+            mappings.next();
+        } // paragraph separator; never replace blocks
+        let Block::Paragraph(p) = &mut doc.blocks[block] else {
+            unreachable!()
+        };
+        let mut runs = slice_runs(p, 0, from);
+        let mut selected_len = 0;
+        for mut run in slice_runs(p, from, to) {
+            run.text = run
+                .text
+                .chars()
+                .map(|_| mappings.next().expect("one mapping per source scalar"))
+                .collect();
+            selected_len += run.text.len();
+            runs.push(run);
+        }
+        runs.extend(slice_runs(p, to, p.len_bytes()));
+        p.runs = runs;
+        if block == end.block {
+            caret.offset = p.snap_forward(from + selected_len);
+        }
+    }
+    Ok(Selection::caret(caret))
 }

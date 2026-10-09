@@ -22,10 +22,13 @@ increment, not a claim that the complete roadmap has shipped.
   Unicode word boundaries (UAX #29) in the original paragraph text.
 - Show a compact result count and a selectable result list in the existing
   Find / Replace surface. Selecting a result moves the editor selection and
-  reveals the match in the canvas.
+  reveals the match in the canvas. Keep virtualized results keyboard operable:
+  Tab enters the list, arrow keys move through results and scroll as needed,
+  Home/End reach the first/last match, and Enter activates the focused result.
 - Add case conversion for selected text only: uppercase, lowercase, title case,
-  and sentence case. All text changes go through existing undoable editor
-  commands.
+  and sentence case. A UI-independent undoable core command must preserve run
+  styles, paragraph properties, page breaks, and all other document structure.
+  An unchanged result must not create a dirty edit or an undo step.
 - Add a small, keyboard-accessible symbol picker for common punctuation,
   nonbreaking characters, currency/math symbols, arrows, and representative
   emoji. Insertion replaces a non-empty selection and inserts at a caret.
@@ -65,8 +68,10 @@ counter, and a compact result list whose entries select and reveal their match.
 Refresh results when the query/options change. Find next, Replace, and Replace
 all must honor the selected options. Replace a selected result only when its
 range is one of the current query's matches. Invalid/empty queries must not
-mutate the document. Preserve existing keyboard focus and protected-import
-save behavior.
+mutate the document. Virtualization must preserve keyboard access: Tab enters
+the result list, Up/Down moves one result and scrolls it into view, Home/End
+jumps to the first/last result, and Enter activates the focused row. Preserve
+existing keyboard focus and protected-import save behavior.
 
 Tests must cover literal compatibility, case-insensitive matching (including a
 Unicode lowercase expansion), UAX #29 whole-word boundaries around Unicode
@@ -78,17 +83,21 @@ deferred.
 
 ### Task 2: Selection case conversion and special-character picker
 
-In `apps/desktop/src/editing.rs` or a narrowly scoped helper module, implement
-and test uppercase, lowercase, title-case, and sentence-case transformations
+In `crates/document-core/src/case.rs` and the shared `Command::ConvertCase`
+command, implement and test uppercase, lowercase, title-case, and sentence-case
+transformations
 for Unicode text. Use Rust's Unicode case mappings. Title case preserves
 whitespace and uppercases the first grapheme of each Unicode-whitespace
 delimited token while lowercasing the rest. Sentence case lowercases the text,
 then uppercases the first non-whitespace grapheme and the first non-whitespace
 grapheme after `.`, `?`, or `!` followed by whitespace. Preserve punctuation
 and whitespace. Add an `Aa` toolbar menu in `apps/desktop/src/main.rs` that
-applies the transform to the current non-empty selection through
-`Command::ReplaceText`; keep the selection collapsed at the transformed text's
-end and retain undo/redo.
+applies the transform to the current non-empty selection through a
+UI-independent core command. Preserve the original style of every transformed
+grapheme, paragraph formatting, and explicit page-break blocks, including
+when a selection spans multiple paragraphs or pages. Keep unchanged selections
+unchanged. Collapse the selection at the transformed range's end and retain
+one-step undo/redo.
 
 Add a labeled Symbols toolbar control with a compact, keyboard-operable picker.
 Include these exact characters with spoken/action labels: nonbreaking space
@@ -102,8 +111,10 @@ symbol inserts it at the caret or replaces the current selection through
 focus/reveal behavior, and provide accessible names for every symbol action.
 
 Tests must exercise Unicode case conversion, punctuation and whitespace
-preservation in title/sentence case, undo/redo of a transformation, symbol
-insertion at a caret and over a selection, and accessibility-visible controls.
+preservation in title/sentence case, style-preserving conversion across mixed
+runs and differently formatted paragraphs, page-break preservation, unchanged
+text, undo/redo of a transformation, symbol insertion at a caret and over a
+selection, and accessibility-visible controls.
 
 Update feature inventory and acceptance evidence. Do not imply date/time,
 custom replacements, or emoji search have shipped.
@@ -121,6 +132,10 @@ custom replacements, or emoji search have shipped.
   undoable and continues to mark the document dirty for recovery.
 - Result-list controls and symbol buttons must remain reachable with keyboard
   navigation and expose meaningful labels.
+- Virtualized search rows must be keyboard-navigable to offscreen matches; do
+  not depend on mouse scrolling for results beyond the first viewport.
+- Case conversion must preserve rich-text styles and explicit page structure,
+  even when the converted letters are already in the requested case.
 
 ## Execution
 

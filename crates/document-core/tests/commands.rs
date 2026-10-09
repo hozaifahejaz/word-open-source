@@ -795,3 +795,114 @@ fn replace_all_finds_valid_overlap_after_rejected_whole_word_candidate() {
         assert!(!e.is_dirty());
     }
 }
+
+fn case_fixture(first: &str, second: &str) -> Document {
+    let bold = TextStyle {
+        bold: true,
+        ..Default::default()
+    };
+    let italic = TextStyle {
+        italic: true,
+        ..Default::default()
+    };
+    Document {
+        blocks: vec![
+            Block::Paragraph(Paragraph {
+                runs: vec![
+                    Run::new("keep ", TextStyle::default()),
+                    Run::new(first, bold.clone()),
+                    Run::new(second, italic.clone()),
+                ],
+                style: ParagraphStyle {
+                    alignment: Alignment::Center,
+                    ..Default::default()
+                },
+                default_style: bold.clone(),
+            }),
+            Block::Paragraph(Paragraph {
+                default_style: italic.clone(),
+                style: ParagraphStyle {
+                    space_before_twips: 140,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            Block::PageBreak,
+            Block::Paragraph(Paragraph {
+                runs: vec![
+                    Run::new(first, italic.clone()),
+                    Run::new(second, bold.clone()),
+                    Run::new(" after", TextStyle::default()),
+                ],
+                style: ParagraphStyle {
+                    alignment: Alignment::Right,
+                    space_after_twips: 240,
+                    ..Default::default()
+                },
+                default_style: italic,
+            }),
+        ],
+        ..Default::default()
+    }
+}
+
+#[test]
+fn case_conversion_preserves_blocks_styles_expansions_and_atomic_history() {
+    for (first, second, upper, mapped_first, mapped_second) in [
+        ("ß", "é", true, "SS", "É"),
+        ("İ", "Σ", false, "i\u{307}", "ς"),
+    ] {
+        let mut e = Editor::new(case_fixture(first, second)).unwrap();
+        let original = e.document().clone();
+        let selection = range((3, first.len() + second.len()), (0, 5));
+        e.set_selection(selection).unwrap();
+        let expected = case_fixture(mapped_first, mapped_second);
+        let outcome = e
+            .execute(Command::ConvertCase {
+                selection,
+                case: if upper {
+                    TextCase::Upper
+                } else {
+                    TextCase::Lower
+                },
+            })
+            .unwrap();
+        assert_eq!(
+            e.document(),
+            &expected,
+            "case conversion must retain rich document structure"
+        );
+        let caret = Selection::caret(at(3, mapped_first.len() + mapped_second.len()));
+        assert_eq!(outcome.selection, caret);
+        assert!(outcome.changed);
+        assert!(e.is_dirty());
+        e.execute(Command::Undo).unwrap();
+        assert_eq!(e.document(), &original);
+        assert_eq!(e.selection(), selection);
+        assert!(!e.is_dirty());
+        assert!(!e.can_undo(), "one transaction only");
+        e.execute(Command::Redo).unwrap();
+        assert_eq!(e.document(), &expected);
+        assert_eq!(e.selection(), caret);
+    }
+}
+
+#[test]
+fn unchanged_case_conversion_preserves_metadata_clean_state_and_history() {
+    let mut e = Editor::new(case_fixture("SS", "É")).unwrap();
+    let original = e.document().clone();
+    let selection = range((0, 5), (3, 4));
+    e.set_selection(selection).unwrap();
+    let outcome = e
+        .execute(Command::ConvertCase {
+            selection,
+            case: TextCase::Upper,
+        })
+        .unwrap();
+    assert_eq!(e.document(), &original);
+    assert!(!outcome.changed);
+    assert!(!e.is_dirty());
+    assert!(!e.can_undo());
+    assert!(!e.can_redo());
+    assert_eq!(e.selection(), Selection::caret(at(3, 4)));
+}

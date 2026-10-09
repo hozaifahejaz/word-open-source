@@ -40,8 +40,8 @@ and build; published help scopes are recorded below without invented build numbe
 | Paragraphs/styled text | Supported | Bold/italic/underline, family/size/RGB; native rich-text canvas with font fallback | Create document; ECMA Part 1 |
 | Selection/editing | Supported | Grapheme-safe commands, selection, history, visual navigation; IME event support, OS verification limited | Design/edit; contracts |
 | Editing toolbar/statistics | Supported | Labeled original icons, plain-text Cut/Copy/Paste, clear text formatting; document/selection whitespace-word and grapheme counts | Desktop guide |
-| Find/replace | Supported | Literal paragraph-local, cross-run search; optional Unicode lowercase comparison and UAX #29 whole words; result navigation/counter; regex deferred | Design/edit; contracts |
-| Case conversion/symbols | Supported | Selection-only Unicode upper/lower/title/sentence case; 19 named symbol actions insert at caret or replace selection; undo/redo | [Acceptance evidence](ACCEPTANCE.md) |
+| Find/replace | Supported | Literal paragraph-local, cross-run search; optional Unicode lowercase comparison and UAX #29 whole words; virtualized keyboard/mouse result navigation/counter; regex deferred | Design/edit; contracts |
+| Case conversion/symbols | Supported | Selection-only Unicode upper/lower/title/sentence case preserving rich document structure; 19 named symbol actions insert at caret or replace selection; undo/redo | [Acceptance evidence](ACCEPTANCE.md) |
 | Alignment/spacing | Supported | Four alignments; before/after and multiple/exact/at-least spacing; indent/tab stops deferred | Desktop/web; ECMA Part 1 |
 | Page settings/breaks | Supported | One size/orientation/margin set and explicit breaks; automatic/explicit pagination implemented | Desktop/web; ECMA Part 1 |
 | Local workspace | Supported | File-tab Recent Documents (12 unique paths), unavailable-entry removal, per-document caret, remembered light/dark appearance and zoom | [Acceptance evidence](ACCEPTANCE.md) |
@@ -77,9 +77,11 @@ lowercase, title case or sentence case using Rust Unicode mappings. Title case
 uppercases the first original grapheme of each Unicode-whitespace-delimited token
 and lowercases its remainder. Sentence case lowercases text, then uppercases the
 first non-whitespace grapheme and the first after `.`, `?` or `!` followed by
-whitespace. Whitespace and punctuation stay intact. Changes use `ReplaceText`,
-collapse the selection at the replacement end, and support Undo/Redo; a caret
-alone leaves text unchanged.
+whitespace. Whitespace and punctuation stay intact. The UI-independent
+`ConvertCase` core command preserves each run style, paragraph properties, empty-paragraph typing
+style and explicit page break. One transaction collapses the selection at its
+transformed end and supports Undo/Redo; unchanged text adds no dirty state or
+history, and a caret alone leaves the document unchanged.
 
 Symbols offers 19 named, keyboard-reachable actions: nonbreaking space/hyphen,
 em dash, ellipsis, bullet, copyright, pound/euro/yen, plus/minus,
@@ -94,7 +96,12 @@ recorded in [acceptance evidence](ACCEPTANCE.md).
 ## Search increment — 2026-10-10
 
 Find / Replace provides Match case (enabled by default), Whole words, a current
-result counter, and a compact scrollable list that selects and reveals matches.
+result counter, and a compact virtualized scrollable list that selects and reveals
+matches. Tab enters the list; Up/Down move one result, Home/End reach the first/last
+result, and navigation scrolls and transfers row focus while revealing the document
+range. Enter activates the focused row and returns focus to the canvas. Mouse
+selection remains available.
+
 Find next wraps through the current query's matches; Replace accepts only a
 selection whose range is a current match, and Replace all is one undoable command.
 Changing the query/options or editing the document refreshes the results. Empty

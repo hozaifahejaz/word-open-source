@@ -10,7 +10,11 @@ use editing::{Action, move_to};
 use egui::{Color32, Key, Rect, Stroke, Vec2};
 use icons::{Icon, IconButton};
 use layout::DocumentLayout;
-use std::path::PathBuf;
+use std::{
+    path::PathBuf,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
+use workspace::{CheckpointDebounce, RecoverySnapshot, StoredPath, WorkspaceStore};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -55,6 +59,11 @@ struct FolioApp {
     show_ai_connection: bool,
     ai_bridge: Option<mcp::Bridge>,
     allow_close: bool,
+    workspace_store: Option<WorkspaceStore>,
+    recovery_checkpoint: CheckpointDebounce,
+    autosave_checkpoint: CheckpointDebounce,
+    observed_document: Document,
+    last_recovery_document: Option<Document>,
 }
 impl Default for FolioApp {
     fn default() -> Self {
@@ -88,10 +97,120 @@ impl Default for FolioApp {
             show_ai_connection: false,
             ai_bridge: None,
             allow_close: false,
+            workspace_store: None,
+            recovery_checkpoint: CheckpointDebounce::default(),
+            autosave_checkpoint: CheckpointDebounce::default(),
+            observed_document: Document::default(),
+            last_recovery_document: None,
         }
     }
 }
 impl FolioApp {
+    fn schedule_checkpoints(&mut self, now: Instant) {
+        if self.observed_document != *self.editor.document() {
+            self.observed_document = self.editor.document().clone();
+            if self.editor.is_dirty() {
+                self.recovery_checkpoint.mark_changed(now);
+                self.autosave_checkpoint.mark_changed(now);
+            }
+        }
+    }
+    fn recovery_snapshot(&self) -> Result<RecoverySnapshot, workspace::StoreError> {
+        Ok(RecoverySnapshot {
+            document: self.editor.document().clone(),
+            path: self
+                .path
+                .as_deref()
+                .map(StoredPath::from_path)
+                .transpose()?,
+            protected_source: self
+                .protected
+                .as_deref()
+                .map(StoredPath::from_path)
+                .transpose()?,
+            warnings: self.warnings.clone(),
+            selection: self.editor.selection(),
+            captured_unix_seconds: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        })
+    }
+    fn flush_recovery(&mut self) -> bool {
+        if !self.editor.is_dirty()
+            || self.workspace_store.is_none()
+            || self.last_recovery_document.as_ref() == Some(self.editor.document())
+        {
+            self.recovery_checkpoint.clear();
+            return true;
+        }
+        let result = self.recovery_snapshot().and_then(|snapshot| {
+            self.workspace_store
+                .as_ref()
+                .unwrap()
+                .save_recovery(&snapshot)
+        });
+        match result {
+            Ok(()) => {
+                self.last_recovery_document = Some(self.editor.document().clone());
+                self.recovery_checkpoint.clear();
+                true
+            }
+            Err(error) => {
+                self.error = Some(format!("Could not checkpoint recovery: {error}"));
+                // A later edit or confirmed close can retry; avoid disk IO on every frame.
+                self.recovery_checkpoint.clear();
+                false
+            }
+        }
+    }
+    fn clear_recovery(&mut self) -> bool {
+        if let Some(store) = &self.workspace_store {
+            if let Err(error) = store.clear_recovery() {
+                self.error = Some(format!("Could not clear recovery: {error}"));
+                return false;
+            }
+        }
+        self.last_recovery_document = None;
+        self.recovery_checkpoint.clear();
+        self.autosave_checkpoint.clear();
+        self.observed_document = self.editor.document().clone();
+        true
+    }
+    fn process_checkpoints(&mut self, now: Instant, ctx: &egui::Context) {
+        if self.allow_close {
+            return;
+        }
+        if self.recovery_checkpoint.is_due(now, Duration::from_secs(2)) {
+            self.flush_recovery();
+            ctx.request_repaint();
+        }
+        let eligible = self.editor.is_dirty() && self.path.is_some() && self.protected.is_none();
+        if self.autosave_checkpoint.is_due(now, Duration::from_secs(5))
+            && self.pending.is_none()
+            && self.overwrite.is_none()
+        {
+            self.autosave_checkpoint.clear();
+            if eligible {
+                self.save_to(self.path.clone().unwrap(), ctx);
+                ctx.request_repaint();
+            }
+        }
+        let mut deadline = self
+            .recovery_checkpoint
+            .changed_at
+            .map(|t| t + Duration::from_secs(2));
+        if eligible && self.pending.is_none() && self.overwrite.is_none() {
+            if let Some(changed) = self.autosave_checkpoint.changed_at {
+                let save_at = changed + Duration::from_secs(5);
+                deadline = Some(deadline.map_or(save_at, |recovery| recovery.min(save_at)));
+            }
+        }
+        if let Some(deadline) = deadline {
+            ctx.request_repaint_after(deadline.saturating_duration_since(now));
+        }
+    }
+
     fn process_ai_requests(&mut self, ctx: &egui::Context) {
         let requests: Vec<_> = self
             .ai_bridge
@@ -318,6 +437,18 @@ impl FolioApp {
     fn toggle_document_info(&mut self) {
         self.show_document_info = !self.show_document_info;
     }
+    fn discard_pending(&mut self, pending: Pending, ctx: &egui::Context) {
+        if !self.clear_recovery() {
+            return;
+        }
+        self.pending = None;
+        if matches!(pending, Pending::Quit) {
+            self.allow_close = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        } else {
+            self.perform(pending, ctx);
+        }
+    }
     fn request(&mut self, pending: Pending, ctx: &egui::Context) {
         self.composition = None;
         if self.editor.is_dirty() {
@@ -329,6 +460,9 @@ impl FolioApp {
     fn perform(&mut self, pending: Pending, ctx: &egui::Context) {
         match pending {
             Pending::New => {
+                if !self.clear_recovery() {
+                    return;
+                }
                 self.editor = Editor::default();
                 self.path = None;
                 self.protected = None;
@@ -345,6 +479,7 @@ impl FolioApp {
                     match files::open(&path) {
                         Ok(report) => match self.editor.load_document(report.document) {
                             Ok(()) => {
+                                self.clear_recovery();
                                 self.protected =
                                     (!report.warnings.is_empty()).then(|| path.clone());
                                 self.path = Some(path);
@@ -363,6 +498,9 @@ impl FolioApp {
                 }
             }
             Pending::Quit => {
+                if !self.flush_recovery() {
+                    return;
+                }
                 self.allow_close = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
@@ -427,6 +565,7 @@ impl FolioApp {
         match files::save(self.editor.document(), &path, self.protected.as_deref()) {
             Ok(()) => {
                 self.editor.mark_saved();
+                self.clear_recovery();
                 self.path = Some(path);
                 self.notice = "Saved".into();
                 self.focus_canvas = true;
@@ -1618,8 +1757,7 @@ impl FolioApp {
                             self.save(false, ctx);
                         }
                         if ui.button("Discard changes").clicked() {
-                            self.pending = None;
-                            self.perform(pending, ctx);
+                            self.discard_pending(pending, ctx);
                         }
                         if ui.button("Cancel").clicked() {
                             self.pending = None;
@@ -1826,6 +1964,9 @@ impl eframe::App for FolioApp {
             if self.editor.is_dirty() { " •" } else { "" }
         );
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
+        let now = Instant::now();
+        self.schedule_checkpoints(now);
+        self.process_checkpoints(now, ctx);
     }
 }
 fn main() -> eframe::Result {
@@ -1862,7 +2003,12 @@ fn main() -> eframe::Result {
         Box::new(|cc| {
             layout::install_fonts(&cc.egui_ctx);
             theme::install(&cc.egui_ctx);
-            Ok(Box::new(FolioApp::default()))
+            let mut app = FolioApp::default();
+            match WorkspaceStore::for_user() {
+                Ok(store) => app.workspace_store = Some(store),
+                Err(error) => app.error = Some(format!("Could not initialize workspace: {error}")),
+            }
+            Ok(Box::new(app))
         }),
     )
 }
@@ -1870,6 +2016,306 @@ fn main() -> eframe::Result {
 #[cfg(test)]
 mod app_tests {
     use super::*;
+    struct RecoveryDirectory(PathBuf);
+    impl RecoveryDirectory {
+        fn new() -> Self {
+            static SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            Self(std::env::temp_dir().join(format!(
+                "folio-recovery-app-{}-{}",
+                std::process::id(),
+                SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            )))
+        }
+        fn app(&self) -> FolioApp {
+            FolioApp {
+                workspace_store: Some(workspace::WorkspaceStore::at(self.0.clone())),
+                ..Default::default()
+            }
+        }
+    }
+    impl Drop for RecoveryDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    #[test]
+    fn recovery_snapshot_round_trips_warning_guard_and_selection() {
+        let dir = RecoveryDirectory::new();
+        let mut app = dir.app();
+        app.insert("draft".into());
+        app.path = Some(PathBuf::from("copy.docx"));
+        app.protected = Some(PathBuf::from("source.docx"));
+        app.warnings = vec![ImportWarning {
+            code: WarningCode::UnsupportedFeature,
+            feature: Feature::Tables,
+            location: Some("word/document.xml".into()),
+            message: "Table omitted".into(),
+        }];
+        app.editor
+            .set_selection(Selection {
+                anchor: Position::new(0, 1),
+                focus: Position::new(0, 4),
+            })
+            .unwrap();
+        assert!(app.flush_recovery());
+        let snapshot = app
+            .workspace_store
+            .as_ref()
+            .unwrap()
+            .load_recovery()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            snapshot.path.unwrap().to_path().unwrap(),
+            PathBuf::from("copy.docx")
+        );
+        assert_eq!(
+            snapshot.protected_source.unwrap().to_path().unwrap(),
+            PathBuf::from("source.docx")
+        );
+        assert_eq!(snapshot.warnings[0].message, "Table omitted");
+        assert_eq!(snapshot.selection.anchor, Position::new(0, 1));
+        assert_eq!(snapshot.selection.focus, Position::new(0, 4));
+    }
+    #[test]
+    fn checkpoint_debounce_coalesces_rapid_edits() {
+        let now = std::time::Instant::now();
+        let mut checkpoint = workspace::CheckpointDebounce::default();
+        checkpoint.mark_changed(now);
+        checkpoint.mark_changed(now + std::time::Duration::from_secs(1));
+        assert!(!checkpoint.is_due(
+            now + std::time::Duration::from_secs(2),
+            std::time::Duration::from_secs(2)
+        ));
+        assert!(checkpoint.is_due(
+            now + std::time::Duration::from_secs(3),
+            std::time::Duration::from_secs(2)
+        ));
+        checkpoint.clear();
+        assert!(!checkpoint.is_due(
+            now + std::time::Duration::from_secs(10),
+            std::time::Duration::from_secs(2)
+        ));
+    }
+    #[test]
+    fn autosave_debounce_waits_for_five_seconds_of_idle() {
+        let dir = RecoveryDirectory::new();
+        let mut app = dir.app();
+        let ctx = egui::Context::default();
+        app.path = Some(dir.0.join("draft.docx"));
+        app.insert("first".into());
+        let now = std::time::Instant::now();
+        app.schedule_checkpoints(now);
+        app.process_checkpoints(now + std::time::Duration::from_secs(2), &ctx);
+        assert!(app.editor.is_dirty());
+        assert!(
+            app.workspace_store
+                .as_ref()
+                .unwrap()
+                .load_recovery()
+                .unwrap()
+                .is_some()
+        );
+        app.insert(" second".into());
+        app.schedule_checkpoints(now + std::time::Duration::from_secs(3));
+        app.process_checkpoints(now + std::time::Duration::from_secs(7), &ctx);
+        assert!(app.editor.is_dirty());
+        app.process_checkpoints(now + std::time::Duration::from_secs(8), &ctx);
+        assert!(!app.editor.is_dirty());
+        assert_eq!(
+            files::open(app.path.as_ref().unwrap())
+                .unwrap()
+                .document
+                .paragraph(0)
+                .unwrap()
+                .text(),
+            "first second"
+        );
+        assert!(
+            app.workspace_store
+                .as_ref()
+                .unwrap()
+                .load_recovery()
+                .unwrap()
+                .is_none()
+        );
+    }
+    #[test]
+    fn autosave_is_ineligible_for_untitled_or_warned_import() {
+        for warned in [false, true] {
+            let dir = RecoveryDirectory::new();
+            let mut app = dir.app();
+            if warned {
+                std::fs::create_dir_all(&dir.0).unwrap();
+                let source = dir.0.join("source.docx");
+                std::fs::write(&source, b"original source").unwrap();
+                app.path = Some(source.clone());
+                app.protected = Some(source);
+            }
+            app.insert("retain me".into());
+            let now = std::time::Instant::now();
+            app.schedule_checkpoints(now);
+            app.process_checkpoints(
+                now + std::time::Duration::from_secs(5),
+                &egui::Context::default(),
+            );
+            assert!(app.editor.is_dirty());
+            assert_eq!(
+                app.workspace_store
+                    .as_ref()
+                    .unwrap()
+                    .load_recovery()
+                    .unwrap()
+                    .unwrap()
+                    .document
+                    .paragraph(0)
+                    .unwrap()
+                    .text(),
+                "retain me"
+            );
+            if warned {
+                assert_eq!(
+                    std::fs::read(app.path.as_ref().unwrap()).unwrap(),
+                    b"original source"
+                );
+            }
+        }
+    }
+    #[test]
+    fn recovery_replacement_is_single_atomic_snapshot() {
+        let dir = RecoveryDirectory::new();
+        let mut app = dir.app();
+        app.insert("first".into());
+        assert!(app.flush_recovery());
+        app.insert(" second".into());
+        assert!(app.flush_recovery());
+        assert_eq!(std::fs::read_dir(&dir.0).unwrap().count(), 1);
+        let snapshot = app
+            .workspace_store
+            .as_ref()
+            .unwrap()
+            .load_recovery()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            snapshot.document.paragraph(0).unwrap().text(),
+            "first second"
+        );
+        assert_eq!(snapshot.selection.focus, Position::new(0, 12));
+        let bytes = std::fs::read(dir.0.join("recovery.json")).unwrap();
+        assert!(app.flush_recovery());
+        assert_eq!(std::fs::read(dir.0.join("recovery.json")).unwrap(), bytes);
+    }
+    #[test]
+    fn failed_recovery_write_keeps_previous_snapshot() {
+        let dir = RecoveryDirectory::new();
+        let mut app = dir.app();
+        app.insert("old".into());
+        assert!(app.flush_recovery());
+        let bytes = std::fs::read(dir.0.join("recovery.json")).unwrap();
+        // Unsupported schema forces a deterministic refusal without replacing the old bytes.
+        let blocked = String::from_utf8(bytes)
+            .unwrap()
+            .replace("\"schema_version\": 1", "\"schema_version\": 999");
+        std::fs::write(dir.0.join("recovery.json"), &blocked).unwrap();
+        app.insert(" new".into());
+        assert!(!app.flush_recovery());
+        assert!(app.error.is_some());
+        assert_eq!(
+            std::fs::read_to_string(dir.0.join("recovery.json")).unwrap(),
+            blocked
+        );
+        assert_eq!(
+            app.last_recovery_document
+                .as_ref()
+                .unwrap()
+                .paragraph(0)
+                .unwrap()
+                .text(),
+            "old"
+        );
+    }
+    #[test]
+    fn recovery_discard_quit_does_not_recapture_unsaved_document() {
+        let dir = RecoveryDirectory::new();
+        let mut app = dir.app();
+        app.insert("discard".into());
+        assert!(app.flush_recovery());
+        app.pending = Some(Pending::Quit);
+        app.discard_pending(Pending::Quit, &egui::Context::default());
+        assert!(app.allow_close);
+        assert!(app.pending.is_none());
+        assert!(
+            app.workspace_store
+                .as_ref()
+                .unwrap()
+                .load_recovery()
+                .unwrap()
+                .is_none()
+        );
+    }
+    #[test]
+    fn failed_recovery_close_keeps_document_and_window_open() {
+        let dir = RecoveryDirectory::new();
+        std::fs::create_dir_all(&dir.0).unwrap();
+        std::fs::write(dir.0.join("recovery.json"), b"{broken").unwrap();
+        let mut app = dir.app();
+        app.insert("unsaved".into());
+        app.perform(Pending::Quit, &egui::Context::default());
+        assert!(!app.allow_close);
+        assert!(app.editor.is_dirty());
+        assert!(app.error.is_some());
+        assert_eq!(
+            std::fs::read(dir.0.join("recovery.json")).unwrap(),
+            b"{broken"
+        );
+    }
+    #[test]
+    fn failed_autosave_retains_recovery_and_dirty_document() {
+        let dir = RecoveryDirectory::new();
+        let mut app = dir.app();
+        app.path = Some(dir.0.join("missing/draft.docx"));
+        app.insert("unsaved".into());
+        let now = Instant::now();
+        app.schedule_checkpoints(now);
+        app.process_checkpoints(now + Duration::from_secs(5), &egui::Context::default());
+        assert!(app.editor.is_dirty());
+        assert!(app.error.is_some());
+        assert!(
+            app.workspace_store
+                .as_ref()
+                .unwrap()
+                .load_recovery()
+                .unwrap()
+                .is_some()
+        );
+    }
+    #[test]
+    fn recovery_flushes_on_confirmed_close_and_clears_on_new() {
+        let dir = RecoveryDirectory::new();
+        let mut app = dir.app();
+        app.insert("keep on close".into());
+        app.perform(Pending::Quit, &egui::Context::default());
+        assert!(app.allow_close);
+        assert!(
+            app.workspace_store
+                .as_ref()
+                .unwrap()
+                .load_recovery()
+                .unwrap()
+                .is_some()
+        );
+        app.perform(Pending::New, &egui::Context::default());
+        assert!(
+            app.workspace_store
+                .as_ref()
+                .unwrap()
+                .load_recovery()
+                .unwrap()
+                .is_none()
+        );
+    }
+
     #[test]
     fn view_tools_toggle_focus_theme_and_document_info() {
         let ctx = egui::Context::default();

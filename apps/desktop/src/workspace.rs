@@ -8,6 +8,24 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// An idle deadline reset by each document change.
+#[derive(Default)]
+pub struct CheckpointDebounce {
+    pub changed_at: Option<std::time::Instant>,
+}
+impl CheckpointDebounce {
+    pub fn mark_changed(&mut self, now: std::time::Instant) {
+        self.changed_at = Some(now);
+    }
+    pub fn is_due(&self, now: std::time::Instant, delay: std::time::Duration) -> bool {
+        self.changed_at
+            .is_some_and(|changed| now.saturating_duration_since(changed) >= delay)
+    }
+    pub fn clear(&mut self) {
+        self.changed_at = None;
+    }
+}
+
 const SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug)]

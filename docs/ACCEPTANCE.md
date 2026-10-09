@@ -7,14 +7,21 @@ This report records scoped evidence, not full Word parity or a release certifica
 
 ## Editing tools and icons — 2026-10-09 follow-up
 
-The subsequent minimalist refresh passed the same 71-test validation, clippy,
+The subsequent minimalist refresh passed the same 74-test validation, clippy,
 formatting and arm64 packaging. Native visual inspection confirmed the compact
 Home toolbar, serif wordmark, indigo selection states and softer paper workspace.
 Accessibility inspection retained action names and formatting/alignment toggle
 states when their visible text labels were replaced with compact icons.
 
-`sh scripts/validate-local.sh` passed formatting, 71 tests (22 core, 23 DOCX,
-26 desktop; one manual benchmark ignored), clippy with warnings denied and arm64
+The feature pass adds Focus mode, session light/dark appearance switching, and a
+right-side document info panel. macOS inspection verified Focus mode hides the
+ribbon/status chrome and restores it with Escape, dark appearance preserves the
+white paper canvas against a dark workspace, and the info panel reports pages,
+words, characters and selection state. The shortcuts are Command/Ctrl + Shift +
+F, D and I respectively.
+
+`sh scripts/validate-local.sh` passed formatting, 74 tests (22 core, 23 DOCX,
+29 desktop; one manual benchmark ignored), clippy with warnings denied and arm64
 release packaging. Regression tests cover native paste requests and keyboard
 activation, clear formatting at a selection/caret, Unicode statistics and exact
 line-height editing through undo and DOCX roundtrip.

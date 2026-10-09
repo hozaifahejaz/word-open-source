@@ -4,6 +4,9 @@ Project author: hozaifahejaz.
 
 ## Unreleased
 
+- Add a distraction-free Focus mode with Escape and Command/Ctrl + Shift + F
+  shortcuts, a session-only light/dark appearance switch, and a document info
+  panel with page, word, character, and selection statistics.
 - Refresh the desktop with compact icon tools, a serif Folio wordmark, muted
   indigo accents, borderless controls, subtle paper shadows and more writing space.
   Icon-only actions retain accessible names, selected states and tooltips.

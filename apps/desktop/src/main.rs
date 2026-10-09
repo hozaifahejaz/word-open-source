@@ -47,6 +47,9 @@ struct FolioApp {
     visual_line: Option<usize>,
     pages: usize,
     active_page: usize,
+    dark_mode: bool,
+    focus_mode: bool,
+    show_document_info: bool,
     allow_close: bool,
 }
 impl Default for FolioApp {
@@ -75,6 +78,9 @@ impl Default for FolioApp {
             visual_line: None,
             pages: 1,
             active_page: 1,
+            dark_mode: false,
+            focus_mode: false,
+            show_document_info: false,
             allow_close: false,
         }
     }
@@ -232,6 +238,19 @@ impl FolioApp {
             }
         }
         response
+    }
+    fn toggle_theme(&mut self, ctx: &egui::Context) {
+        self.dark_mode = !self.dark_mode;
+        theme::install_mode(ctx, self.dark_mode);
+        ctx.request_repaint();
+    }
+    fn toggle_focus_mode(&mut self) {
+        self.focus_mode = !self.focus_mode;
+        self.focus_canvas = true;
+        self.show_document_info = false;
+    }
+    fn toggle_document_info(&mut self) {
+        self.show_document_info = !self.show_document_info;
     }
     fn request(&mut self, pending: Pending, ctx: &egui::Context) {
         self.composition = None;
@@ -461,6 +480,34 @@ impl FolioApp {
             else {
                 continue;
             };
+            if modifiers.command && modifiers.shift && !modifiers.alt {
+                let handled = match key {
+                    Key::F => {
+                        self.toggle_focus_mode();
+                        true
+                    }
+                    Key::D => {
+                        self.toggle_theme(ctx);
+                        true
+                    }
+                    Key::I => {
+                        if !self.focus_mode {
+                            self.toggle_document_info();
+                        }
+                        true
+                    }
+                    _ => false,
+                };
+                if handled {
+                    ctx.input_mut(|i| i.consume_key(modifiers, key));
+                    continue;
+                }
+            }
+            if key == Key::Escape && self.focus_mode {
+                self.toggle_focus_mode();
+                ctx.input_mut(|i| i.consume_key(modifiers, key));
+                continue;
+            }
             let Some(action) = editing::shortcut(key, modifiers) else {
                 continue;
             };
@@ -484,9 +531,91 @@ impl FolioApp {
             }
         }
     }
+    fn focus_bar(&mut self, ctx: &egui::Context) {
+        egui::TopBottomPanel::top("focus-bar")
+            .frame(
+                egui::Frame::new()
+                    .fill(theme::surface(self.dark_mode))
+                    .inner_margin(egui::Margin::symmetric(16, 6)),
+            )
+            .show(ctx, |ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add(IconButton::new(Icon::ExitFocus, "Exit focus mode").compact())
+                        .on_hover_text("Exit focus mode (Escape or Command/Ctrl + Shift + F)")
+                        .clicked()
+                    {
+                        self.toggle_focus_mode();
+                    }
+                    ui.label(
+                        egui::RichText::new("Focus mode")
+                            .small()
+                            .color(theme::muted(self.dark_mode)),
+                    );
+                });
+            });
+    }
+    fn document_info_panel(&mut self, ctx: &egui::Context) {
+        if !self.show_document_info || self.focus_mode {
+            return;
+        }
+        egui::SidePanel::right("document-info")
+            .resizable(false)
+            .default_width(228.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(theme::surface(self.dark_mode))
+                    .inner_margin(egui::Margin::symmetric(18, 16)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("Document info")
+                            .strong()
+                            .color(theme::text(self.dark_mode)),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .add(IconButton::new(Icon::Close, "Close document info").compact())
+                            .clicked()
+                        {
+                            self.toggle_document_info();
+                        }
+                    });
+                });
+                ui.separator();
+                let total = editing::document_statistics(self.editor.document());
+                ui.label(
+                    egui::RichText::new("Document")
+                        .small()
+                        .color(theme::muted(self.dark_mode)),
+                );
+                ui.label(format!("{} pages", self.pages));
+                ui.label(format!("{} words", total.words));
+                ui.label(format!("{} characters", total.characters));
+                ui.add_space(14.0);
+                ui.label(
+                    egui::RichText::new("Selection")
+                        .small()
+                        .color(theme::muted(self.dark_mode)),
+                );
+                if self.editor.selection().is_collapsed() {
+                    ui.label("No selection");
+                } else {
+                    let selected = editing::selection_statistics(&self.editor);
+                    ui.label(format!("{} words", selected.words));
+                    ui.label(format!("{} characters", selected.characters));
+                }
+                ui.add_space(14.0);
+                ui.label(
+                    egui::RichText::new(format!("Page {} of {}", self.active_page, self.pages))
+                        .color(theme::muted(self.dark_mode)),
+                );
+            });
+    }
     fn ribbon(&mut self, ctx: &egui::Context) {
         let frame = egui::Frame::new()
-            .fill(Color32::WHITE)
+            .fill(theme::surface(self.dark_mode))
             .inner_margin(egui::Margin::symmetric(24, 12));
         let panel = egui::TopBottomPanel::top("ribbon").frame(frame);
         panel.show(ctx, |ui| {
@@ -500,7 +629,7 @@ impl FolioApp {
                             26.0,
                             egui::FontFamily::Name("Serif-Regular".into()),
                         ))
-                        .color(theme::INK),
+                        .color(theme::text(self.dark_mode)),
                 );
                 ui.separator();
                 for (label, action, enabled) in [
@@ -548,7 +677,7 @@ impl FolioApp {
                     .unwrap_or("Untitled".into());
                 ui.add(egui::Label::new(egui::RichText::new(name).strong()).truncate());
                 if self.editor.is_dirty() {
-                    ui.colored_label(theme::MUTED, "• Unsaved");
+                    ui.colored_label(theme::muted(self.dark_mode), "• Unsaved");
                 }
             });
             ui.add_space(4.0);
@@ -870,6 +999,36 @@ impl FolioApp {
                                 .clamp(0.25, 2.5);
                         }
                     });
+                    ui.separator();
+                    ui.horizontal_wrapped(|ui| {
+                        if ui
+                            .add(IconButton::new(
+                                if self.focus_mode { Icon::ExitFocus } else { Icon::Focus },
+                                if self.focus_mode { "Exit focus mode" } else { "Focus mode" },
+                            ))
+                            .on_hover_text("Hide editing chrome for distraction-free writing")
+                            .clicked()
+                        {
+                            self.toggle_focus_mode();
+                        }
+                        if ui
+                            .add(IconButton::new(
+                                if self.dark_mode { Icon::Sun } else { Icon::Moon },
+                                if self.dark_mode { "Light appearance" } else { "Dark appearance" },
+                            ))
+                            .on_hover_text("Switch between light and dark appearance (Command/Ctrl + Shift + D)")
+                            .clicked()
+                        {
+                            self.toggle_theme(ctx);
+                        }
+                        if ui
+                            .add(IconButton::new(Icon::Info, "Document info"))
+                            .on_hover_text("Show document and selection statistics (Command/Ctrl + Shift + I)")
+                            .clicked()
+                        {
+                            self.toggle_document_info();
+                        }
+                    });
                 }
             }
             if self.search_open {
@@ -1167,7 +1326,12 @@ impl FolioApp {
             }
         }
     }
+    #[cfg(test)]
     fn canvas(&mut self, ctx: &egui::Context) {
+        let layout = self.canvas_state(ctx);
+        self.paint_canvas(ctx, layout);
+    }
+    fn canvas_state(&mut self, ctx: &egui::Context) -> DocumentLayout {
         let id = egui::Id::new("document-canvas");
         let mut layout = DocumentLayout::build(ctx, self.editor.document(), self.zoom);
         let focused = ctx.memory(|m| m.has_focus(id));
@@ -1176,8 +1340,16 @@ impl FolioApp {
         self.active_page = layout
             .visual_line(self.editor.selection().focus, self.visual_line)
             .map_or(1, |i| layout.lines[i].page + 1);
+        layout
+    }
+    fn paint_canvas(&mut self, ctx: &egui::Context, layout: DocumentLayout) {
+        let id = egui::Id::new("document-canvas");
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(theme::WORKSPACE).inner_margin(24.0))
+            .frame(
+                egui::Frame::new()
+                    .fill(theme::workspace(self.dark_mode))
+                    .inner_margin(24.0),
+            )
             .show(ctx, |ui| {
                 if self.pending.is_some() || self.overwrite.is_some() || self.error.is_some() {
                     ui.disable();
@@ -1230,24 +1402,36 @@ impl FolioApp {
                                 && let Some((at, line)) =
                                     layout.hit_line((pointer - origin).to_pos2())
                             {
+                                let selection_before = self.editor.selection();
                                 move_to(&mut self.editor, at, ctx.input(|i| i.modifiers.shift));
                                 self.visual_line = Some(line);
                                 self.typing = None;
                                 self.preferred_x = None;
+                                if self.editor.selection() != selection_before {
+                                    ctx.request_repaint();
+                                }
                             }
                         }
                         if response.double_clicked() {
                             let at = self.editor.selection().focus;
                             let a = word_edge(self.editor.document(), at, false);
                             let b = word_edge(self.editor.document(), at, true);
+                            let selection_before = self.editor.selection();
                             self.editor.set_selection(Selection::new(a, b)).unwrap();
+                            if self.editor.selection() != selection_before {
+                                ctx.request_repaint();
+                            }
                         } else if response.dragged()
                             && let Some(pointer) = response.interact_pointer_pos()
                             && let Some((at, line)) = layout.hit_line((pointer - origin).to_pos2())
                         {
+                            let selection_before = self.editor.selection();
                             move_to(&mut self.editor, at, true);
                             self.visual_line = Some(line);
                             self.typing = None;
+                            if self.editor.selection() != selection_before {
+                                ctx.request_repaint();
+                            }
                             if pointer.y < ui.clip_rect().top() + 20.0 {
                                 ui.scroll_with_delta(Vec2::new(0.0, 15.0));
                             } else if pointer.y > ui.clip_rect().bottom() - 20.0 {
@@ -1266,7 +1450,7 @@ impl FolioApp {
                             painter.rect_stroke(
                                 page,
                                 1.0,
-                                Stroke::new(1.0, theme::BORDER),
+                                Stroke::new(1.0, theme::border(self.dark_mode)),
                                 egui::StrokeKind::Inside,
                             );
                             painter.text(
@@ -1274,7 +1458,7 @@ impl FolioApp {
                                 egui::Align2::RIGHT_BOTTOM,
                                 format!("{}", i + 1),
                                 egui::FontId::proportional(10.0 * self.zoom),
-                                Color32::GRAY,
+                                theme::muted(self.dark_mode),
                             );
                         }
                         for rect in layout.selection_rects(self.editor.selection()) {
@@ -1480,20 +1664,26 @@ impl eframe::App for FolioApp {
             self.request(Pending::Quit, ctx);
         }
         self.global_shortcuts(ctx);
-        self.ribbon(ctx);
+        if self.focus_mode {
+            self.focus_bar(ctx);
+        } else {
+            self.ribbon(ctx);
+        }
         // A pending destructive operation blocks document/ribbon input until resolved.
         self.dialogs(ctx);
-        let frame = egui::Frame::new()
-            .fill(Color32::WHITE)
-            .inner_margin(egui::Margin::symmetric(16, 8));
-        let panel = egui::TopBottomPanel::bottom("status").frame(frame);
-        panel.show(ctx, |ui| {
+        let layout = self.canvas_state(ctx);
+        if !self.focus_mode {
+            let frame = egui::Frame::new()
+                .fill(theme::surface(self.dark_mode))
+                .inner_margin(egui::Margin::symmetric(16, 8));
+            let panel = egui::TopBottomPanel::bottom("status").frame(frame);
+            panel.show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
                 let total = editing::document_statistics(self.editor.document());
                 ui.label(format!("Page {} of {}", self.active_page, self.pages));
                 ui.separator();
                 let (icon_rect, _) = ui.allocate_exact_size(Vec2::splat(16.0), egui::Sense::hover());
-                Icon::Statistics.paint(ui.painter(), icon_rect, theme::MUTED);
+                Icon::Statistics.paint(ui.painter(), icon_rect, theme::muted(self.dark_mode));
                 ui.label(format!("{} words • {} characters", total.words, total.characters))
                     .on_hover_text("Words are separated by whitespace. Characters include spaces and count each grapheme once; paragraph/page breaks are excluded.");
                 if !self.editor.selection().is_collapsed() {
@@ -1512,16 +1702,16 @@ impl eframe::App for FolioApp {
                 {
                     ("Imported • Save a copy", theme::WARNING)
                 } else if self.path.is_none() {
-                    ("New document", theme::MUTED)
+                    ("New document", theme::muted(self.dark_mode))
                 } else {
-                    ("Saved", theme::MUTED)
+                    ("Saved", theme::muted(self.dark_mode))
                 };
                 ui.colored_label(color, status);
                 if !self.notice.is_empty() && self.notice != status {
                     ui.label(
                         egui::RichText::new(&self.notice)
                             .small()
-                            .color(theme::MUTED),
+                            .color(theme::muted(self.dark_mode)),
                     );
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1532,8 +1722,10 @@ impl eframe::App for FolioApp {
                     .on_hover_text("Document zoom");
                 });
             });
-        });
-        self.canvas(ctx);
+            });
+        }
+        self.document_info_panel(ctx);
+        self.paint_canvas(ctx, layout);
         let title = format!(
             "{}{} — Folio",
             self.path
@@ -1566,6 +1758,72 @@ fn main() -> eframe::Result {
 #[cfg(test)]
 mod app_tests {
     use super::*;
+    #[test]
+    fn view_tools_toggle_focus_theme_and_document_info() {
+        let ctx = egui::Context::default();
+        layout::install_fonts(&ctx);
+        theme::install(&ctx);
+        let mut app = FolioApp::default();
+        assert!(!app.focus_mode);
+        assert!(!app.dark_mode);
+        assert!(!app.show_document_info);
+        app.toggle_focus_mode();
+        assert!(app.focus_mode);
+        assert!(!app.show_document_info);
+        app.toggle_focus_mode();
+        app.toggle_document_info();
+        assert!(app.show_document_info);
+        app.toggle_theme(&ctx);
+        assert!(app.dark_mode);
+        assert!(ctx.style().visuals.dark_mode);
+    }
+
+    #[test]
+    fn dark_theme_switches_visuals_and_can_return_to_light() {
+        let ctx = egui::Context::default();
+        theme::install_mode(&ctx, true);
+        assert!(ctx.style().visuals.dark_mode);
+        assert_eq!(ctx.style().visuals.window_fill, theme::surface(true));
+        let _ = ctx.run(
+            egui::RawInput {
+                system_theme: Some(egui::Theme::Light),
+                ..Default::default()
+            },
+            |_| {},
+        );
+        assert!(ctx.style().visuals.dark_mode);
+        theme::install_mode(&ctx, false);
+        assert!(!ctx.style().visuals.dark_mode);
+        assert_eq!(ctx.style().visuals.window_fill, theme::surface(false));
+    }
+
+    #[test]
+    fn view_shortcuts_toggle_focus_appearance_and_info_without_editing() {
+        let ctx = egui::Context::default();
+        layout::install_fonts(&ctx);
+        theme::install(&ctx);
+        let mut app = FolioApp::default();
+        app.insert("Keep this text".into());
+        app.editor.mark_saved();
+        let original = app.editor.document().clone();
+        let command_shift = egui::Modifiers {
+            command: true,
+            mac_cmd: true,
+            shift: true,
+            ..Default::default()
+        };
+        frame(&mut app, &ctx, vec![key(Key::F, command_shift)]);
+        assert!(app.focus_mode);
+        frame(&mut app, &ctx, vec![key(Key::F, command_shift)]);
+        assert!(!app.focus_mode);
+        frame(&mut app, &ctx, vec![key(Key::D, command_shift)]);
+        assert!(app.dark_mode);
+        frame(&mut app, &ctx, vec![key(Key::I, command_shift)]);
+        assert!(app.show_document_info);
+        assert_eq!(app.editor.document(), &original);
+        assert!(!app.editor.is_dirty());
+    }
+
     #[test]
     fn line_spacing_control_displays_exact_and_minimum_imported_values() {
         fn has_text(shape: &egui::Shape, expected: &str) -> bool {

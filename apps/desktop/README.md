@@ -33,6 +33,10 @@ caret affinity at wrapped lines and page boundaries.
 - The status bar counts document and selected words and characters. Words are
   whitespace-separated tokens; characters are Unicode graphemes including spaces
   and tabs, excluding structural paragraph and page breaks.
+- View adds Focus mode for distraction-free writing, a light/dark appearance
+  switch, and a document info panel. Focus mode hides the ribbon and status bar;
+  press Escape or Command/Ctrl + Shift + F to return. Appearance and panel
+  choices apply to the current session and do not change document content.
 - Find/replace is literal and case-sensitive; matches do not cross paragraphs.
   Command/Ctrl-F focuses a stable search field without changing the document
   selection. Search/replacement input never routes into the canvas. Numeric ribbon

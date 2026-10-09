@@ -1,6 +1,7 @@
 //! Model editing and platform-independent command routing.
 use document_core::*;
 use egui::{Key, Modifiers};
+use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
@@ -14,6 +15,10 @@ pub enum Action {
     Bold,
     Italic,
     Underline,
+    ClearFormatting,
+    Cut,
+    Copy,
+    Paste,
     SelectAll,
     Find,
     PageBreak,
@@ -103,6 +108,45 @@ pub fn selected_text(editor: &Editor) -> String {
     }
     result
 }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Statistics {
+    pub words: usize,
+    /// User-perceived characters, including spaces; structural breaks are excluded.
+    pub characters: usize,
+}
+
+pub fn document_statistics(doc: &Document) -> Statistics {
+    statistics(doc, select_all(doc))
+}
+
+pub fn selection_statistics(editor: &Editor) -> Statistics {
+    statistics(editor.document(), editor.selection())
+}
+
+fn statistics(doc: &Document, selection: Selection) -> Statistics {
+    let (start, end) = selection.ordered();
+    let mut result = Statistics::default();
+    for block in start.block..=end.block {
+        if let Ok(p) = doc.paragraph(block) {
+            let text = p.text();
+            let from = if block == start.block {
+                start.offset
+            } else {
+                0
+            };
+            let to = if block == end.block {
+                end.offset
+            } else {
+                text.len()
+            };
+            let selected = &text[from..to];
+            result.words += selected.split_whitespace().count();
+            result.characters += selected.graphemes(true).count();
+        }
+    }
+    result
+}
 pub fn delete_command(editor: &Editor, forward: bool) -> Command {
     let selection = editor.selection();
     Command::Delete {
@@ -130,6 +174,43 @@ pub fn move_to(editor: &mut Editor, at: Position, extend: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn statistics_count_graphemes_and_keep_structural_breaks_out_of_characters() {
+        let mut e = Editor::new(Document {
+            blocks: vec![
+                Block::Paragraph(Paragraph::plain("Café e\u{301}")),
+                Block::PageBreak,
+                Block::Paragraph(Paragraph::plain("👩‍💻 hi")),
+            ],
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(
+            document_statistics(e.document()),
+            Statistics {
+                words: 4,
+                characters: 10
+            }
+        );
+        e.set_selection(Selection::new(Position::new(2, 14), Position::new(0, 6)))
+            .unwrap();
+        assert_eq!(
+            selection_statistics(&e),
+            Statistics {
+                words: 3,
+                characters: 5
+            }
+        );
+        e.set_selection(Selection::caret(Position::new(0, 0)))
+            .unwrap();
+        assert_eq!(
+            selection_statistics(&e),
+            Statistics {
+                words: 0,
+                characters: 0
+            }
+        );
+    }
     #[test]
     fn command_routes_respect_platform_command_and_shift() {
         let m = Modifiers {

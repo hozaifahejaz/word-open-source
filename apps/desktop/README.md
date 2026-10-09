@@ -1,7 +1,8 @@
 # Folio desktop 0.1.0
 
 Native Rust egui/eframe editor with Folio branding, File/Home/Layout/View ribbon,
-quick-access actions, editable paginated paper, and page/word/zoom status.
+quick-access actions, editable paginated paper, and page/word/character/zoom status.
+Original line icons accompany labeled buttons, with tooltips and keyboard focus.
 The light theme groups text and paragraph tools, highlights Save, and wraps
 controls in narrow windows. Import warnings include a direct converted-copy action.
 The document canvas is a custom rich-text widget, not a plain-text widget plus
@@ -17,11 +18,19 @@ caret affinity at wrapped lines and page boundaries.
   explicit page breaks, and cross-page editing use document-core commands.
 - Bold, italic, underline, Sans/Serif, size and color work on a selection or pending
   typing style. Paragraph alignment, spacing and line spacing update the model.
+- Clear formatting resets selected text to the default text style in one undo step;
+  at a caret it resets future typing. Paragraph formatting stays as configured.
+- Line spacing offers multiples, Exactly and At least, with a point-height field
+  for the latter two. Imported exact/minimum values display their actual heights.
 - Paper, orientation, four margins, zoom and fit width update the editable canvas.
 - Undo/redo restore model content and selection. Replacing a selection with a
   page break is one atomic history step.
 - Clipboard uses native egui/eframe copy/cut/paste. IME preedit is transient and
   displayed at the caret; commit replaces the selection as one undoable edit.
+  Home provides Cut/Copy/Paste buttons; cut and paste are single undoable edits.
+- The status bar counts document and selected words and characters. Words are
+  whitespace-separated tokens; characters are Unicode graphemes including spaces
+  and tabs, excluding structural paragraph and page breaks.
 - Find/replace is literal and case-sensitive; matches do not cross paragraphs.
   Command/Ctrl-F focuses a stable search field without changing the document
   selection. Search/replacement input never routes into the canvas. Numeric ribbon

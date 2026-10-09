@@ -1,10 +1,12 @@
 mod editing;
 mod files;
+mod icons;
 mod layout;
 mod theme;
 use document_core::*;
 use editing::{Action, move_to};
 use egui::{Color32, Key, Rect, Stroke, Vec2};
+use icons::{Icon, IconButton};
 use layout::DocumentLayout;
 use std::path::PathBuf;
 
@@ -154,6 +156,80 @@ impl FolioApp {
                 size_half_points: Some((size * 2.0).round() as u16),
                 ..Default::default()
             });
+        }
+        response
+    }
+    fn line_spacing_control(
+        &mut self,
+        ui: &mut egui::Ui,
+        current: LineSpacing,
+    ) -> Option<egui::Response> {
+        let label = ui.label("Line spacing");
+        let mut spacing = current;
+        let text = match current {
+            LineSpacing::Multiple(n) => format!("{}×", f64::from(n) / 100.0),
+            LineSpacing::Exact(n) => format!("Exactly {} pt", f64::from(n) / 20.0),
+            LineSpacing::AtLeast(n) => format!("At least {} pt", f64::from(n) / 20.0),
+        };
+        let height = match current {
+            LineSpacing::Exact(n) | LineSpacing::AtLeast(n) => n,
+            _ => 240,
+        };
+        egui::ComboBox::from_id_salt("spacing")
+            .selected_text(text)
+            .show_ui(ui, |ui| {
+                for n in [100, 115, 150, 200] {
+                    ui.selectable_value(
+                        &mut spacing,
+                        LineSpacing::Multiple(n),
+                        format!("{}×", f64::from(n) / 100.0),
+                    );
+                }
+                ui.separator();
+                ui.selectable_value(&mut spacing, LineSpacing::Exact(height), "Exactly");
+                ui.selectable_value(&mut spacing, LineSpacing::AtLeast(height), "At least");
+            })
+            .response
+            .labelled_by(label.id);
+        let mode_changed = spacing != current;
+        let mut response = None;
+        if let LineSpacing::Exact(height) | LineSpacing::AtLeast(height) = spacing {
+            let label = ui.label("Height");
+            let mut points = f64::from(height) / 20.0;
+            let numeric = ui
+                .push_id("line-spacing-height", |ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut points)
+                            .update_while_editing(false)
+                            .range(0.05..=f64::from(u32::MAX) / 20.0)
+                            .speed(0.5)
+                            .suffix(" pt"),
+                    )
+                })
+                .inner
+                .labelled_by(label.id)
+                .on_hover_text("Line height in points (0.05 pt increments)");
+            if numeric.changed() {
+                let twips = (points * 20.0).round().clamp(1.0, f64::from(u32::MAX)) as u32;
+                spacing = if matches!(spacing, LineSpacing::Exact(_)) {
+                    LineSpacing::Exact(twips)
+                } else {
+                    LineSpacing::AtLeast(twips)
+                };
+            }
+            response = Some(numeric);
+        }
+        if spacing != current {
+            self.execute(Command::FormatParagraphs {
+                selection: self.editor.selection(),
+                patch: ParagraphPatch {
+                    line_spacing: Some(spacing),
+                    ..Default::default()
+                },
+            });
+            if mode_changed {
+                self.focus_canvas = true;
+            }
         }
         response
     }
@@ -313,6 +389,35 @@ impl FolioApp {
                 underline: Some(!self.current_style().underline),
                 ..Default::default()
             }),
+            Action::ClearFormatting => {
+                let style = TextStyle::default();
+                self.format(StylePatch {
+                    bold: Some(style.bold),
+                    italic: Some(style.italic),
+                    underline: Some(style.underline),
+                    font_family: Some(style.font_family),
+                    size_half_points: Some(style.size_half_points),
+                    color: Some(style.color),
+                });
+                self.focus_canvas = true;
+            }
+            Action::Copy | Action::Cut => {
+                if !self.editor.selection().is_collapsed() {
+                    ctx.copy_text(editing::selected_text(&self.editor));
+                    if action == Action::Cut {
+                        self.execute(Command::Delete {
+                            selection: self.editor.selection(),
+                        });
+                    }
+                }
+                self.focus_canvas = true;
+            }
+            Action::Paste => {
+                self.composition = None;
+                self.ime_enabled = false;
+                self.focus_canvas = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+            }
             Action::SelectAll => {
                 self.editor
                     .set_selection(editing::select_all(self.editor.document()))
@@ -407,9 +512,9 @@ impl FolioApp {
                         ui.separator();
                     }
                     let button = if action == Action::Save {
-                        theme::primary_button(label)
+                        IconButton::new(Icon::Save, label).primary()
                     } else {
-                        egui::Button::new(label)
+                        IconButton::new(Icon::for_action(action), label)
                     };
                     let command = if cfg!(target_os = "macos") {
                         "⌘"
@@ -467,7 +572,10 @@ impl FolioApp {
                             ("Save", Action::Save),
                             ("Save As…", Action::SaveAs),
                         ] {
-                            if ui.button(label).clicked() {
+                            if ui
+                                .add(IconButton::new(Icon::for_action(action), label))
+                                .clicked()
+                            {
                                 self.action(action, ctx);
                             }
                         }
@@ -476,6 +584,42 @@ impl FolioApp {
                 }
                 Tab::Home => {
                     ui.horizontal_wrapped(|ui| {
+                        ui.label(egui::RichText::new("Clipboard").small().color(theme::MUTED));
+                        for (label, action, key) in [
+                            ("Cut", Action::Cut, "X"),
+                            ("Copy", Action::Copy, "C"),
+                            ("Paste", Action::Paste, "V"),
+                        ] {
+                            let enabled =
+                                action == Action::Paste || !self.editor.selection().is_collapsed();
+                            let command = if cfg!(target_os = "macos") {
+                                "⌘"
+                            } else {
+                                "Ctrl+"
+                            };
+                            if ui
+                                .add_enabled(
+                                    enabled,
+                                    IconButton::new(Icon::for_action(action), label),
+                                )
+                                .on_hover_text(format!("{label} ({command}{key})"))
+                                .clicked()
+                            {
+                                self.action(action, ctx);
+                            }
+                        }
+                        ui.separator();
+                        if ui
+                            .add(IconButton::new(Icon::ClearFormatting, "Clear formatting"))
+                            .on_hover_text(
+                                "Reset text to Noto Sans, 12 pt, black; keep paragraph layout",
+                            )
+                            .clicked()
+                        {
+                            self.action(Action::ClearFormatting, ctx);
+                        }
+                    });
+                    ui.horizontal_wrapped(|ui| {
                         ui.label(egui::RichText::new("Text").small().color(theme::MUTED));
                         let style = self.current_style();
                         for (label, selected, action) in [
@@ -483,7 +627,14 @@ impl FolioApp {
                             ("Italic", style.italic, Action::Italic),
                             ("Underline", style.underline, Action::Underline),
                         ] {
-                            if ui.selectable_label(selected, label).clicked() {
+                            if ui
+                                .add(
+                                    IconButton::new(Icon::for_action(action), label)
+                                        .selected(selected),
+                                )
+                                .on_hover_text(format!("Toggle {label}"))
+                                .clicked()
+                            {
                                 self.action(action, ctx);
                             }
                         }
@@ -547,8 +698,14 @@ impl FolioApp {
                             ("Right", Alignment::Right),
                             ("Justify", Alignment::Justify),
                         ] {
+                            let icon = match value {
+                                Alignment::Left => Icon::AlignLeft,
+                                Alignment::Center => Icon::AlignCenter,
+                                Alignment::Right => Icon::AlignRight,
+                                Alignment::Justify => Icon::AlignJustify,
+                            };
                             if ui
-                                .selectable_label(alignment == value, label)
+                                .add(IconButton::new(icon, label).selected(alignment == value))
                                 .on_hover_text(format!("Align paragraph {label}"))
                                 .clicked()
                             {
@@ -562,7 +719,11 @@ impl FolioApp {
                                 self.focus_canvas = true;
                             }
                         }
-                        if ui.button("Find / Replace").clicked() {
+                        if ui
+                            .add(IconButton::new(Icon::Find, "Find / Replace"))
+                            .on_hover_text("Find and replace text (Command/Ctrl + F)")
+                            .clicked()
+                        {
                             if self.search_open {
                                 self.search_open = false;
                                 self.focus_canvas = true;
@@ -608,34 +769,7 @@ impl FolioApp {
                                 });
                             }
                         }
-                        ui.label("Line spacing");
-                        let mut multiple = match p.line_spacing {
-                            LineSpacing::Multiple(n) => n,
-                            _ => 100,
-                        };
-                        egui::ComboBox::from_id_salt("spacing")
-                            .selected_text(format!("{}×", multiple as f32 / 100.0))
-                            .show_ui(ui, |ui| {
-                                for n in [100, 115, 150, 200] {
-                                    if ui
-                                        .selectable_value(
-                                            &mut multiple,
-                                            n,
-                                            format!("{}×", n as f32 / 100.0),
-                                        )
-                                        .changed()
-                                    {
-                                        self.execute(Command::FormatParagraphs {
-                                            selection: self.editor.selection(),
-                                            patch: ParagraphPatch {
-                                                line_spacing: Some(LineSpacing::Multiple(n)),
-                                                ..Default::default()
-                                            },
-                                        });
-                                        self.focus_canvas = true;
-                                    }
-                                }
-                            });
+                        self.line_spacing_control(ui, p.line_spacing);
                     });
                 }
                 Tab::Layout => {
@@ -692,7 +826,7 @@ impl FolioApp {
                             self.execute(Command::SetPageLayout { layout: page });
                         }
                         if ui
-                            .button("Page break")
+                            .add(IconButton::new(Icon::PageBreak, "Page break"))
                             .on_hover_text("Insert explicit page break (Command/Ctrl + Enter)")
                             .clicked()
                         {
@@ -707,10 +841,13 @@ impl FolioApp {
                             egui::Slider::new(&mut self.zoom, 0.25..=2.5)
                                 .custom_formatter(|n, _| format!("{:.0}%", n * 100.0)),
                         );
-                        if ui.button("100%").clicked() {
+                        if ui.add(IconButton::new(Icon::Zoom, "100%")).clicked() {
                             self.zoom = 1.0;
                         }
-                        if ui.button("Fit page width").clicked() {
+                        if ui
+                            .add(IconButton::new(Icon::FitWidth, "Fit page width"))
+                            .clicked()
+                        {
                             self.zoom = ((ctx.screen_rect().width() - 80.0)
                                 / (self
                                     .editor
@@ -753,7 +890,10 @@ impl FolioApp {
                     )
                     .labelled_by(label.id);
                     if ui
-                        .add_enabled(!self.needle.is_empty(), egui::Button::new("Find next"))
+                        .add_enabled(
+                            !self.needle.is_empty(),
+                            IconButton::new(Icon::Find, "Find next"),
+                        )
                         .clicked()
                     {
                         self.find_next();
@@ -788,7 +928,7 @@ impl FolioApp {
                             Err(e) => self.error = Some(e.to_string()),
                         }
                     }
-                    if ui.button("Close find").clicked() {
+                    if ui.add(IconButton::new(Icon::Close, "Close find")).clicked() {
                         self.search_open = false;
                         self.focus_canvas = true;
                     }
@@ -976,12 +1116,14 @@ impl FolioApp {
                     handled = true;
                 }
                 egui::Event::Copy | egui::Event::Cut if focused => {
-                    ctx.copy_text(editing::selected_text(&self.editor));
-                    if matches!(event, egui::Event::Cut) {
-                        self.execute(Command::Delete {
-                            selection: self.editor.selection(),
-                        });
-                    }
+                    self.action(
+                        if matches!(event, egui::Event::Cut) {
+                            Action::Cut
+                        } else {
+                            Action::Copy
+                        },
+                        ctx,
+                    );
                     handled = true;
                 }
                 egui::Event::Ime(ime) if focused => {
@@ -1251,7 +1393,7 @@ impl FolioApp {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(egui::RichText::new("Some document features could not be preserved").strong().color(theme::WARNING));
                     let enabled = self.pending.is_none() && self.overwrite.is_none() && self.error.is_none();
-                    if ui.add_enabled(enabled, theme::primary_button("Save converted copy…")).clicked() {
+                    if ui.add_enabled(enabled, IconButton::new(Icon::SaveAs, "Save converted copy…").primary()).clicked() {
                         self.save(true, ctx);
                     }
                 });
@@ -1336,22 +1478,18 @@ impl eframe::App for FolioApp {
         let panel = egui::TopBottomPanel::bottom("status").frame(frame);
         panel.show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
-                let words: usize = self
-                    .editor
-                    .document()
-                    .blocks
-                    .iter()
-                    .filter_map(|b| {
-                        if let Block::Paragraph(p) = b {
-                            Some(p.text().split_whitespace().count())
-                        } else {
-                            None
-                        }
-                    })
-                    .sum();
+                let total = editing::document_statistics(self.editor.document());
                 ui.label(format!("Page {} of {}", self.active_page, self.pages));
                 ui.separator();
-                ui.label(format!("{words} words"));
+                let (icon_rect, _) = ui.allocate_exact_size(Vec2::splat(16.0), egui::Sense::hover());
+                Icon::Statistics.paint(ui.painter(), icon_rect, theme::MUTED);
+                ui.label(format!("{} words • {} characters", total.words, total.characters))
+                    .on_hover_text("Words are separated by whitespace. Characters include spaces and count each grapheme once; paragraph/page breaks are excluded.");
+                if !self.editor.selection().is_collapsed() {
+                    let selected = editing::selection_statistics(&self.editor);
+                    ui.separator();
+                    ui.label(format!("Selected: {} words • {} characters", selected.words, selected.characters));
+                }
                 ui.separator();
                 let (status, color) = if self.editor.is_dirty() {
                     ("Unsaved changes", theme::ACCENT)
@@ -1417,6 +1555,293 @@ fn main() -> eframe::Result {
 #[cfg(test)]
 mod app_tests {
     use super::*;
+    #[test]
+    fn line_spacing_control_displays_exact_and_minimum_imported_values() {
+        fn has_text(shape: &egui::Shape, expected: &str) -> bool {
+            match shape {
+                egui::Shape::Text(text) => text.galley.job.text == expected,
+                egui::Shape::Vec(shapes) => shapes.iter().any(|shape| has_text(shape, expected)),
+                _ => false,
+            }
+        }
+        let ctx = egui::Context::default();
+        layout::install_fonts(&ctx);
+        theme::install(&ctx);
+        let mut app = FolioApp::default();
+        for (spacing, expected) in [
+            (LineSpacing::Exact(360), "Exactly 18 pt"),
+            (LineSpacing::AtLeast(480), "At least 24 pt"),
+        ] {
+            app.editor
+                .execute(Command::FormatParagraphs {
+                    selection: app.editor.selection(),
+                    patch: ParagraphPatch {
+                        line_spacing: Some(spacing),
+                        ..Default::default()
+                    },
+                })
+                .unwrap();
+            frame(&mut app, &ctx, vec![]);
+            let output = frame(&mut app, &ctx, vec![]);
+            assert!(
+                output.shapes.iter().any(|s| has_text(&s.shape, expected)),
+                "Missing line spacing label: {expected}"
+            );
+            assert_eq!(
+                app.editor
+                    .document()
+                    .paragraph(0)
+                    .unwrap()
+                    .style
+                    .line_spacing,
+                spacing
+            );
+        }
+    }
+    #[test]
+    fn exact_line_height_commits_once_preserves_selection_and_roundtrips() {
+        let ctx = egui::Context::default();
+        layout::install_fonts(&ctx);
+        let mut app = FolioApp::default();
+        app.insert("first\nsecond".into());
+        let selection = editing::select_all(app.editor.document());
+        app.editor.set_selection(selection).unwrap();
+        app.execute(Command::FormatParagraphs {
+            selection,
+            patch: ParagraphPatch {
+                line_spacing: Some(LineSpacing::Exact(240)),
+                ..Default::default()
+            },
+        });
+        app.editor.mark_saved();
+        app.focus_canvas = false;
+        let original = app.editor.document().clone();
+        let mut numeric_frame = |events: Vec<egui::Event>, focus: bool| {
+            ctx.begin_pass(egui::RawInput {
+                events,
+                ..Default::default()
+            });
+            let mut id = egui::Id::NULL;
+            egui::TopBottomPanel::top("spacing-test").show(&ctx, |ui| {
+                let current = app
+                    .editor
+                    .document()
+                    .paragraph(0)
+                    .unwrap()
+                    .style
+                    .line_spacing;
+                ui.horizontal(|ui| {
+                    let response = app.line_spacing_control(ui, current).unwrap();
+                    id = response.id;
+                    if focus {
+                        response.request_focus();
+                    }
+                });
+            });
+            app.canvas(&ctx);
+            let _ = ctx.end_pass();
+            id
+        };
+        let id = numeric_frame(vec![], true);
+        numeric_frame(vec![], false);
+        numeric_frame(
+            vec![key(
+                Key::A,
+                egui::Modifiers {
+                    command: true,
+                    mac_cmd: true,
+                    ..Default::default()
+                },
+            )],
+            false,
+        );
+        numeric_frame(vec![egui::Event::Text("18.5".into())], false);
+        assert!(ctx.memory(|m| m.has_focus(id)));
+        numeric_frame(vec![key(Key::Enter, Default::default())], false);
+        assert_eq!(app.editor.selection(), selection);
+        for block in 0..2 {
+            assert_eq!(
+                app.editor
+                    .document()
+                    .paragraph(block)
+                    .unwrap()
+                    .style
+                    .line_spacing,
+                LineSpacing::Exact(370)
+            );
+        }
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        let report = folio_docx::export_docx(app.editor.document(), &mut bytes).unwrap();
+        assert!(report.warnings.is_empty());
+        bytes.set_position(0);
+        let imported = folio_docx::import_docx(bytes).unwrap();
+        assert_eq!(imported.document, *app.editor.document());
+        app.action(Action::Undo, &ctx);
+        assert_eq!(app.editor.document(), &original);
+        assert!(!app.editor.is_dirty());
+    }
+    #[test]
+    fn clear_formatting_resets_only_selected_text_and_is_undoable() {
+        let ctx = egui::Context::default();
+        let mut app = FolioApp {
+            typing: Some(TextStyle {
+                bold: true,
+                italic: true,
+                underline: true,
+                font_family: "serif".into(),
+                size_half_points: 36,
+                color: Color::rgb(150, 20, 20),
+            }),
+            ..Default::default()
+        };
+        app.insert("before selected after".into());
+        let original = app.editor.document().clone();
+        app.editor
+            .set_selection(Selection::new(Position::new(0, 7), Position::new(0, 15)))
+            .unwrap();
+        app.action(Action::ClearFormatting, &ctx);
+        let p = app.editor.document().paragraph(0).unwrap();
+        assert_eq!(p.runs.len(), 3);
+        assert_eq!(p.runs[1].text, "selected");
+        assert_eq!(p.runs[1].style, TextStyle::default());
+        assert!(p.runs[0].style.bold && p.runs[2].style.bold);
+        app.action(Action::Undo, &ctx);
+        assert_eq!(app.editor.document(), &original);
+    }
+
+    #[test]
+    fn clear_formatting_at_a_caret_changes_future_typing_only() {
+        let ctx = egui::Context::default();
+        let mut app = FolioApp {
+            typing: Some(TextStyle {
+                bold: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        app.insert("bold".into());
+        app.editor.mark_saved();
+        app.action(Action::ClearFormatting, &ctx);
+        assert!(!app.editor.is_dirty());
+        app.insert(" plain".into());
+        let runs = &app.editor.document().paragraph(0).unwrap().runs;
+        assert_eq!(runs.len(), 2);
+        assert!(runs[0].style.bold);
+        assert_eq!(runs[1].style, TextStyle::default());
+    }
+
+    #[test]
+    fn clipboard_toolbar_copy_and_cut_use_selection_and_one_undo_step() {
+        let ctx = egui::Context::default();
+        let mut app = FolioApp::default();
+        app.insert("first\nsecond".into());
+        app.editor.mark_saved();
+        let selection = Selection::new(Position::new(0, 2), Position::new(1, 3));
+        app.editor.set_selection(selection).unwrap();
+        ctx.begin_pass(Default::default());
+        app.action(Action::Copy, &ctx);
+        let output = ctx.end_pass();
+        assert!(
+            output
+                .platform_output
+                .commands
+                .iter()
+                .any(|c| matches!(c, egui::OutputCommand::CopyText(s) if s == "rst\nsec"))
+        );
+        assert!(!app.editor.is_dirty());
+        ctx.begin_pass(Default::default());
+        app.action(Action::Cut, &ctx);
+        let output = ctx.end_pass();
+        assert!(
+            output
+                .platform_output
+                .commands
+                .iter()
+                .any(|c| matches!(c, egui::OutputCommand::CopyText(s) if s == "rst\nsec"))
+        );
+        assert_eq!(app.editor.document().paragraph(0).unwrap().text(), "fiond");
+        app.action(Action::Undo, &ctx);
+        assert_eq!(app.editor.selection(), selection);
+        assert!(!app.editor.is_dirty());
+    }
+
+    #[test]
+    fn keyboard_activating_paste_does_not_insert_the_activation_key() {
+        let ctx = egui::Context::default();
+        layout::install_fonts(&ctx);
+        let mut app = FolioApp::default();
+        app.insert("keep".into());
+        app.editor.mark_saved();
+        app.focus_canvas = false;
+        let mut button_frame = |events: Vec<egui::Event>, focus: bool| {
+            ctx.begin_pass(egui::RawInput {
+                events,
+                ..Default::default()
+            });
+            egui::TopBottomPanel::top("paste-test").show(&ctx, |ui| {
+                let response = ui.add(IconButton::new(Icon::Paste, "Paste"));
+                if focus {
+                    response.request_focus();
+                }
+                if response.clicked() {
+                    app.action(Action::Paste, &ctx);
+                }
+            });
+            app.canvas(&ctx);
+            ctx.end_pass()
+        };
+        button_frame(vec![], true);
+        let output = button_frame(vec![key(Key::Enter, Default::default())], false);
+        assert!(
+            output.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .iter()
+                .any(|c| matches!(c, egui::ViewportCommand::RequestPaste))
+        );
+        assert!(!app.editor.is_dirty());
+        assert_eq!(app.editor.document().paragraph(0).unwrap().text(), "keep");
+        frame(&mut app, &ctx, vec![egui::Event::Paste(" pasted".into())]);
+        assert_eq!(
+            app.editor.document().paragraph(0).unwrap().text(),
+            "keep pasted"
+        );
+        app.action(Action::Undo, &ctx);
+        assert!(!app.editor.is_dirty());
+    }
+    #[test]
+    fn clipboard_toolbar_paste_requests_native_clipboard_and_replaces_selection() {
+        let ctx = egui::Context::default();
+        layout::install_fonts(&ctx);
+        let mut app = FolioApp::default();
+        app.insert("replace".into());
+        app.editor
+            .set_selection(editing::select_all(app.editor.document()))
+            .unwrap();
+        frame(&mut app, &ctx, vec![]);
+        ctx.begin_pass(Default::default());
+        app.action(Action::Paste, &ctx);
+        app.ribbon(&ctx);
+        app.canvas(&ctx);
+        let output = ctx.end_pass();
+        assert!(
+            output.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .iter()
+                .any(|c| matches!(c, egui::ViewportCommand::RequestPaste))
+        );
+        frame(
+            &mut app,
+            &ctx,
+            vec![egui::Event::Paste("Café\nnext".into())],
+        );
+        assert_eq!(app.editor.document().paragraph(0).unwrap().text(), "Café");
+        assert_eq!(app.editor.document().paragraph(1).unwrap().text(), "next");
+        app.action(Action::Undo, &ctx);
+        assert_eq!(
+            app.editor.document().paragraph(0).unwrap().text(),
+            "replace"
+        );
+    }
     #[test]
     fn page_break_replaces_selection_in_one_undo_step() {
         let ctx = egui::Context::default();

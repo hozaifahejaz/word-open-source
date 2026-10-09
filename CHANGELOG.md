@@ -4,6 +4,12 @@ Project author: hozaifahejaz.
 
 ## Unreleased
 
+- Add original line icons alongside labeled ribbon buttons and tooltips.
+- Add native clipboard toolbar actions and undoable clear-text-formatting.
+- Expose exact/minimum line heights, preserving imported values and applying
+  typed heights at commit. Add selection and document word/grapheme counts.
+- Test clipboard focus, clear formatting, Unicode statistics and exact line-height
+  editing through undo and DOCX roundtrip.
 - Report omitted paragraph-mark formatting in named DOCX styles so imported
   sources require a protected converted copy.
 - Preserve spacing and typing styles around imported break-only paragraphs.

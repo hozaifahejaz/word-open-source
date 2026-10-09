@@ -5,6 +5,21 @@ Available host: Apple Silicon arm64, macOS **27.0 (26A428)**, Apple clang
 21.0.0, Rust **1.90.0**. Windows and Linux were not executed locally.
 This report records scoped evidence, not full Word parity or a release certification.
 
+## Editing tools and icons — 2026-10-09 follow-up
+
+`sh scripts/validate-local.sh` passed formatting, 71 tests (22 core, 23 DOCX,
+26 desktop; one manual benchmark ignored), clippy with warnings denied and arm64
+release packaging. Regression tests cover native paste requests and keyboard
+activation, clear formatting at a selection/caret, Unicode statistics and exact
+line-height editing through undo and DOCX roundtrip.
+
+The rebuilt macOS app was inspected with its original line icons and labeled
+buttons. Toolbar Copy/Cut/Paste preserved `Café é` and `👩‍💻 hi` across two
+paragraphs; document/selection statistics showed 4 words and 10 characters.
+Bold toggled on and Clear formatting toggled it off. The exact line-height field
+accepted 18.5 pt and displayed `Exactly 18.5 pt`. Other-platform GUI behavior
+and a full screen-reader audit remain outside this check.
+
 ## Automated validation — locally passed
 
 Final checks ran **serially**, with checkout-local tools, caches, targets and

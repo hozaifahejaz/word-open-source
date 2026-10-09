@@ -39,6 +39,7 @@ and build; published help scopes are recorded below without invented build numbe
 | --- | --- | --- | --- |
 | Paragraphs/styled text | Supported | Bold/italic/underline, family/size/RGB; native rich-text canvas with font fallback | Create document; ECMA Part 1 |
 | Selection/editing | Supported | Grapheme-safe commands, selection, history, visual navigation; IME event support, OS verification limited | Design/edit; contracts |
+| Editing toolbar/statistics | Supported | Labeled original icons, plain-text Cut/Copy/Paste, clear text formatting; document/selection whitespace-word and grapheme counts | Desktop guide |
 | Find/replace | Supported | Literal case-sensitive paragraph-local, cross-run search; advanced modes deferred | Design/edit; contracts |
 | Alignment/spacing | Supported | Four alignments; before/after and multiple/exact/at-least spacing; indent/tab stops deferred | Desktop/web; ECMA Part 1 |
 | Page settings/breaks | Supported | One size/orientation/margin set and explicit breaks; automatic/explicit pagination implemented | Desktop/web; ECMA Part 1 |

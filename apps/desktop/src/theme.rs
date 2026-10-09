@@ -1,5 +1,5 @@
 //! Shared visual treatment for the ribbon, paper workspace and status panels.
-use egui::{Button, Color32, Context, FontId, RichText, Stroke, TextStyle, Vec2};
+use egui::{Color32, Context, FontId, Stroke, TextStyle, Vec2};
 
 pub const ACCENT: Color32 = Color32::from_rgb(25, 98, 91);
 pub const INK: Color32 = Color32::from_rgb(37, 48, 57);
@@ -48,13 +48,6 @@ pub fn install(ctx: &Context) {
     style.visuals.widgets.active.bg_fill = Color32::from_rgb(213, 235, 231);
     style.visuals.widgets.active.weak_bg_fill = Color32::from_rgb(213, 235, 231);
     ctx.set_style(style);
-}
-
-pub fn primary_button(label: &str) -> Button<'_> {
-    Button::new(RichText::new(label).strong().color(Color32::WHITE))
-        .fill(ACCENT)
-        .stroke(Stroke::NONE)
-        .corner_radius(6)
 }
 
 #[cfg(test)]

@@ -10,25 +10,27 @@ This report records scoped evidence, not full Word parity or a release certifica
 Host: macOS **27.0 (26A428)**, arm64, Rust **1.90.0**
 (`1159e78c4 2025-09-14`). Checkout-local Cargo/Rustup, target and scratch directories
 were used. Final formatting, tests, clippy and release packaging cover the workspace
-increment through `add8019`. Native smoke below was performed before that scoped
-lint fix, through `61fc4c2`; earlier sections remain historical evidence.
+increment through recovery fix `3eef71d`. Native smoke below remains through
+`61fc4c2`; no additional native smoke followed the fixes. Earlier sections remain
+historical evidence.
 
 | Automated check | Observed result |
 | --- | --- |
 | `cargo fmt --all -- --check` | PASS, exit 0, no output |
-| `cargo test --workspace --offline --locked` | PASS: 22 core + 5 core recovery integration + 23 DOCX + 81 desktop = 131 passed; 0 failed; one manual desktop benchmark ignored |
-| `cargo clippy --workspace --all-targets --offline --locked -- -D warnings` | PASS, exit 0 after scoped lint fix `add8019` |
-| `sh scripts/package-macos.sh` | PASS after `add8019`: release build, plist lint, arm64 Mach-O verification; unsigned local bundle rebuilt |
+| `cargo test --workspace --offline --locked` | PASS: 22 core + 5 core recovery integration + 23 DOCX + 85 desktop = 135 passed; 0 failed; one manual desktop benchmark ignored |
+| `cargo clippy --workspace --all-targets --offline --locked -- -D warnings` | PASS after recovery fix `3eef71d` |
+| `sh scripts/package-macos.sh` | PASS after `3eef71d`: release build, plist lint, arm64 Mach-O verification; unsigned local bundle rebuilt |
 
 The initial clippy attempt reported four `collapsible_if` findings in `main.rs`;
-`add8019` resolved them. The controller reran all three code checks after that fix:
+`add8019` resolved them. The controller reran all three code checks after the
+subsequent recovery fix `3eef71d`:
 formatting exited 0, tests passed with the counts above, and clippy exited 0.
-The controller also reran `sh scripts/package-macos.sh` after `add8019`; release
+The controller also reran `sh scripts/package-macos.sh` after `3eef71d`; release
 build, plist validation and arm64 Mach-O verification passed. This rebuilt bundle
 was not subjected to additional native smoke.
 The initial task logs are `build/validation/workspace-recovery-{tests,clippy,package}.log`
 (ignored local artifacts, recorded through `61fc4c2`); their clippy failure is
-superseded by the final rerun, and the package log predates the final rebuild.
+superseded by the final rerun, and the package log predates the latest release rebuild after `3eef71d`.
 No Windows/Linux native checks or remote CI results are implied.
 
 The rebuilt `dist/Folio.app` was exercised with native UI automation, accessibility

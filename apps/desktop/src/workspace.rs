@@ -1,5 +1,5 @@
 //! Private, versioned local workspace and recovery persistence.
-use document_core::{Document, ImportWarning, Position, Selection};
+use document_core::{Document, Editor, ImportWarning, Position, Selection};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     env,
@@ -34,6 +34,7 @@ pub enum StoreError {
     MalformedJson(serde_json::Error),
     UnsupportedSchemaVersion(u32),
     InvalidPath(String),
+    InvalidDocument(String),
 }
 impl fmt::Display for StoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -44,6 +45,7 @@ impl fmt::Display for StoreError {
                 write!(f, "Unsupported workspace schema version: {v}")
             }
             Self::InvalidPath(e) => write!(f, "Invalid stored path: {e}"),
+            Self::InvalidDocument(e) => write!(f, "Invalid recovered document: {e}"),
         }
     }
 }
@@ -237,19 +239,40 @@ impl WorkspaceStore {
     pub fn load_state(&self) -> Result<Option<WorkspaceState>, StoreError> {
         let mut state: Option<WorkspaceState> = self.load("workspace.json")?;
         if let Some(state) = &mut state {
+            for path in state
+                .recent
+                .iter()
+                .map(|r| &r.path)
+                .chain(state.carets.iter().map(|c| &c.path))
+            {
+                path.to_path()?;
+            }
             state.normalize();
         }
         Ok(state)
     }
     pub fn save_state(&self, state: &WorkspaceState) -> Result<(), StoreError> {
+        self.load_state()?;
         let mut state = state.clone();
         state.normalize();
         self.save("workspace.json", &state)
     }
     pub fn load_recovery(&self) -> Result<Option<RecoverySnapshot>, StoreError> {
-        self.load("recovery.json")
+        let snapshot: Option<RecoverySnapshot> = self.load("recovery.json")?;
+        if let Some(snapshot) = &snapshot {
+            for path in [&snapshot.path, &snapshot.protected_source]
+                .into_iter()
+                .flatten()
+            {
+                path.to_path()?;
+            }
+            Editor::new(snapshot.document.clone())
+                .map_err(|error| StoreError::InvalidDocument(error.to_string()))?;
+        }
+        Ok(snapshot)
     }
     pub fn save_recovery(&self, snapshot: &RecoverySnapshot) -> Result<(), StoreError> {
+        self.load_recovery()?;
         self.save("recovery.json", snapshot)
     }
     pub fn clear_recovery(&self) -> Result<(), StoreError> {

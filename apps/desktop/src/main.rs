@@ -14,7 +14,7 @@ use std::{
     path::PathBuf,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use workspace::{CheckpointDebounce, RecoverySnapshot, StoredPath, WorkspaceStore};
+use workspace::{CheckpointDebounce, RecoverySnapshot, StoredPath, WorkspaceState, WorkspaceStore};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -65,6 +65,8 @@ struct FolioApp {
     observed_document: Document,
     last_recovery_document: Option<Document>,
     recovery_cleanup_pending: bool,
+    workspace_state: WorkspaceState,
+    pending_recovery: Option<RecoverySnapshot>,
 }
 impl Default for FolioApp {
     fn default() -> Self {
@@ -104,10 +106,99 @@ impl Default for FolioApp {
             observed_document: Document::default(),
             last_recovery_document: None,
             recovery_cleanup_pending: false,
+            workspace_state: WorkspaceState::default(),
+            pending_recovery: None,
         }
     }
 }
 impl FolioApp {
+    fn with_workspace_store(store: WorkspaceStore) -> Self {
+        let mut app = Self::default();
+        let mut errors = Vec::new();
+        match store.load_state() {
+            Ok(Some(state)) => {
+                app.dark_mode = state.dark_mode;
+                app.zoom = state.zoom;
+                app.workspace_state = state;
+            }
+            Ok(None) => {}
+            Err(error) => errors.push(format!("Could not load workspace: {error}")),
+        }
+        match store.load_recovery() {
+            Ok(Some(snapshot)) => {
+                // Validate all restored data before offering it; leave the stored file intact.
+                match Self::recovered_editor(&snapshot) {
+                    Ok(_) => app.pending_recovery = Some(snapshot),
+                    Err(error) => errors.push(format!("Could not load recovery: {error}")),
+                }
+            }
+            Ok(None) => {}
+            Err(error) => errors.push(format!("Could not load recovery: {error}")),
+        }
+        if !errors.is_empty() {
+            app.error = Some(errors.join("\n\n"));
+        }
+        app.workspace_store = Some(store);
+        app
+    }
+    fn from_user_profile() -> Self {
+        match WorkspaceStore::for_user() {
+            Ok(store) => Self::with_workspace_store(store),
+            Err(error) => Self {
+                error: Some(format!("Could not initialize workspace: {error}")),
+                ..Default::default()
+            },
+        }
+    }
+    fn recovered_editor(snapshot: &RecoverySnapshot) -> Result<Editor, String> {
+        for path in [&snapshot.path, &snapshot.protected_source]
+            .into_iter()
+            .flatten()
+        {
+            path.to_path().map_err(|error| error.to_string())?;
+        }
+        let mut editor = Editor::default();
+        editor
+            .load_recovered_document(snapshot.document.clone(), snapshot.selection)
+            .map_err(|error| error.to_string())?;
+        Ok(editor)
+    }
+    fn restore_startup_recovery(&mut self) -> bool {
+        let Some(snapshot) = self.pending_recovery.as_ref() else {
+            return false;
+        };
+        let editor = match Self::recovered_editor(snapshot) {
+            Ok(editor) => editor,
+            Err(error) => {
+                self.error = Some(format!("Could not restore recovery: {error}"));
+                return false;
+            }
+        };
+        self.path = snapshot.path.as_ref().map(|path| path.to_path().unwrap());
+        self.protected = snapshot
+            .protected_source
+            .as_ref()
+            .map(|path| path.to_path().unwrap());
+        self.warnings = snapshot.warnings.clone();
+        self.editor = editor;
+        self.observed_document = self.editor.document().clone();
+        self.last_recovery_document = Some(self.editor.document().clone());
+        self.pending_recovery = None;
+        self.typing = None;
+        self.focus_canvas = true;
+        self.reveal = true;
+        self.notice = "Recovered unsaved document".into();
+        true
+    }
+    fn discard_startup_recovery(&mut self) -> bool {
+        if !self.clear_recovery() {
+            return false;
+        }
+        self.pending_recovery = None;
+        self.focus_canvas = true;
+        self.notice = "Recovery discarded".into();
+        true
+    }
     fn schedule_checkpoints(&mut self, now: Instant) {
         if self.observed_document != *self.editor.document() {
             self.observed_document = self.editor.document().clone();
@@ -274,7 +365,11 @@ impl FolioApp {
             .map(|bridge| bridge.receiver.try_iter().take(8).collect())
             .unwrap_or_default();
         for request in requests {
-            let result = mcp::call(self, &request.name, request.args);
+            let result = if self.pending_recovery.is_some() {
+                Err("Resolve the startup recovery prompt before using AI tools".into())
+            } else {
+                mcp::call(self, &request.name, request.args)
+            };
             let _ = request.reply.send(result);
             ctx.request_repaint();
         }
@@ -699,7 +794,8 @@ impl FolioApp {
         }
     }
     fn global_shortcuts(&mut self, ctx: &egui::Context) {
-        if self.pending.is_some()
+        if self.pending_recovery.is_some()
+            || self.pending.is_some()
             || self.overwrite.is_some()
             || self.error.is_some()
             || self.ime_enabled
@@ -762,7 +858,7 @@ impl FolioApp {
                 i.consume_key(modifiers, key);
             });
             self.action(action, ctx);
-            if self.pending.is_some() || self.error.is_some() {
+            if self.pending_recovery.is_some() || self.pending.is_some() || self.error.is_some() {
                 break;
             }
         }
@@ -863,7 +959,7 @@ impl FolioApp {
             .inner_margin(egui::Margin::symmetric(24, 12));
         let panel = egui::TopBottomPanel::top("ribbon").frame(frame);
         panel.show(ctx, |ui| {
-            if self.pending.is_some() || self.overwrite.is_some() || self.error.is_some() {
+            if self.pending_recovery.is_some() || self.pending.is_some() || self.overwrite.is_some() || self.error.is_some() {
                 ui.disable();
             }
             ui.horizontal_wrapped(|ui| {
@@ -1381,7 +1477,11 @@ impl FolioApp {
         }
         let events = ctx.input(|i| i.events.clone());
         for event in events {
-            if self.pending.is_some() || self.overwrite.is_some() || self.error.is_some() {
+            if self.pending_recovery.is_some()
+                || self.pending.is_some()
+                || self.overwrite.is_some()
+                || self.error.is_some()
+            {
                 break;
             }
             let mut handled = false;
@@ -1602,7 +1702,11 @@ impl FolioApp {
                     .inner_margin(24.0),
             )
             .show(ctx, |ui| {
-                if self.pending.is_some() || self.overwrite.is_some() || self.error.is_some() {
+                if self.pending_recovery.is_some()
+                    || self.pending.is_some()
+                    || self.overwrite.is_some()
+                    || self.error.is_some()
+                {
                     ui.disable();
                 }
                 egui::ScrollArea::both()
@@ -1773,6 +1877,50 @@ impl FolioApp {
             });
     }
     fn dialogs(&mut self, ctx: &egui::Context) {
+        if let Some(snapshot) = self
+            .pending_recovery
+            .as_ref()
+            .filter(|_| self.error.is_none())
+        {
+            let captured = snapshot.captured_unix_seconds;
+            let elapsed = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+                .saturating_sub(captured);
+            let age = if elapsed < 60 {
+                "just now".into()
+            } else if elapsed < 3600 {
+                format!("{} minutes ago", elapsed / 60)
+            } else if elapsed < 86400 {
+                format!("{} hours ago", elapsed / 3600)
+            } else {
+                format!("{} days ago", elapsed / 86400)
+            };
+            egui::Window::new("Recover your writing")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.set_max_width(420.0);
+                    ui.label("Folio found an unsaved document from a previous session.");
+                    ui.label(format!("Captured {age}")).on_hover_text(format!(
+                        "Capture time: {captured} seconds since the Unix epoch"
+                    ));
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add(IconButton::new(Icon::Open, "Restore").primary())
+                            .clicked()
+                        {
+                            self.restore_startup_recovery();
+                        }
+                        if ui.button("Discard recovery").clicked() {
+                            self.discard_startup_recovery();
+                        }
+                    });
+                });
+        }
         if let Some(pending) = self
             .pending
             .filter(|_| self.overwrite.is_none() && self.error.is_none())
@@ -1912,7 +2060,13 @@ impl eframe::App for FolioApp {
         self.process_ai_requests(ctx);
         if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.request(Pending::Quit, ctx);
+            if self.pending_recovery.is_some() {
+                // Closing the launch prompt preserves the snapshot for the next launch.
+                self.allow_close = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            } else {
+                self.request(Pending::Quit, ctx);
+            }
         }
         self.global_shortcuts(ctx);
         if self.focus_mode {
@@ -2033,11 +2187,11 @@ fn main() -> eframe::Result {
         },
         Box::new(|cc| {
             layout::install_fonts(&cc.egui_ctx);
-            theme::install(&cc.egui_ctx);
-            let mut app = FolioApp::default();
-            match WorkspaceStore::for_user() {
-                Ok(store) => app.workspace_store = Some(store),
-                Err(error) => app.error = Some(format!("Could not initialize workspace: {error}")),
+            let app = FolioApp::from_user_profile();
+            if app.dark_mode {
+                theme::install_mode(&cc.egui_ctx, true);
+            } else {
+                theme::install(&cc.egui_ctx);
             }
             Ok(Box::new(app))
         }),
@@ -2068,6 +2222,169 @@ mod app_tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+    #[test]
+    fn startup_restores_theme_zoom_and_recents() {
+        let dir = RecoveryDirectory::new();
+        let store = WorkspaceStore::at(dir.0.clone());
+        let mut state = workspace::WorkspaceState {
+            dark_mode: true,
+            zoom: 1.75,
+            ..Default::default()
+        };
+        state.record_recent(
+            StoredPath::from_path(&dir.0.join("recent.docx")).unwrap(),
+            42,
+        );
+        store.save_state(&state).unwrap();
+        let app = FolioApp::with_workspace_store(store);
+        assert!(app.dark_mode);
+        assert_eq!(app.zoom, 1.75);
+        assert_eq!(app.workspace_state, state);
+        assert!(FolioApp::default().workspace_store.is_none());
+    }
+    fn captured_draft(dir: &RecoveryDirectory) -> RecoverySnapshot {
+        let mut app = dir.app();
+        app.editor
+            .execute(Command::ReplaceText {
+                selection: app.editor.selection(),
+                text: "Recovered draft".into(),
+                style: None,
+            })
+            .unwrap();
+        app.path = Some(dir.0.join("draft.docx"));
+        app.protected = app.path.clone();
+        app.warnings = vec![ImportWarning {
+            code: WarningCode::UnsupportedFeature,
+            feature: Feature::Tables,
+            location: Some("word/document.xml".into()),
+            message: "Table omitted".into(),
+        }];
+        app.editor
+            .set_selection(Selection {
+                anchor: Position::new(0, 2),
+                focus: Position::new(0, 8),
+            })
+            .unwrap();
+        app.recovery_snapshot().unwrap()
+    }
+    #[test]
+    fn recovery_prompt_waits_for_explicit_restore_or_discard() {
+        let dir = RecoveryDirectory::new();
+        let store = WorkspaceStore::at(dir.0.clone());
+        let snapshot = captured_draft(&dir);
+        store.save_recovery(&snapshot).unwrap();
+        let mut app = FolioApp::with_workspace_store(store);
+        assert_eq!(app.editor.document(), &Document::default());
+        assert!(!app.editor.is_dirty());
+        assert_eq!(app.pending_recovery.as_ref(), Some(&snapshot));
+        let ctx = egui::Context::default();
+        layout::install_fonts(&ctx);
+        frame(
+            &mut app,
+            &ctx,
+            vec![egui::Event::Text("accidental edit".into())],
+        );
+        assert_eq!(app.editor.document(), &Document::default());
+        assert_eq!(app.pending_recovery.as_ref(), Some(&snapshot));
+        assert!(app.discard_startup_recovery());
+        assert!(app.pending_recovery.is_none());
+        assert!(!app.editor.is_dirty());
+        assert!(
+            app.workspace_store
+                .as_ref()
+                .unwrap()
+                .load_recovery()
+                .unwrap()
+                .is_none()
+        );
+    }
+    #[test]
+    fn recovery_restores_editor_as_dirty() {
+        let dir = RecoveryDirectory::new();
+        let store = WorkspaceStore::at(dir.0.clone());
+        let snapshot = captured_draft(&dir);
+        store.save_recovery(&snapshot).unwrap();
+        let mut app = FolioApp::with_workspace_store(store);
+        assert!(app.restore_startup_recovery());
+        assert!(app.pending_recovery.is_none());
+        assert_eq!(app.editor.document(), &snapshot.document);
+        assert_eq!(app.editor.selection(), snapshot.selection);
+        assert!(app.editor.is_dirty());
+        assert!(!app.editor.can_undo());
+        assert_eq!(app.path, Some(dir.0.join("draft.docx")));
+        assert_eq!(app.protected, app.path);
+        assert_eq!(app.warnings, snapshot.warnings);
+        assert!(
+            app.workspace_store
+                .as_ref()
+                .unwrap()
+                .load_recovery()
+                .unwrap()
+                .is_some()
+        );
+    }
+    #[test]
+    fn corrupt_recovery_does_not_block_startup() {
+        let dir = RecoveryDirectory::new();
+        std::fs::create_dir_all(&dir.0).unwrap();
+        std::fs::write(dir.0.join("recovery.json"), b"{broken").unwrap();
+        std::fs::write(dir.0.join("workspace.json"), b"{broken state").unwrap();
+        let app = FolioApp::with_workspace_store(WorkspaceStore::at(dir.0.clone()));
+        assert!(app.pending_recovery.is_none());
+        assert_eq!(app.editor.document(), &Document::default());
+        let error = app.error.unwrap();
+        assert!(error.contains("workspace"));
+        assert!(error.contains("recovery"));
+        assert_eq!(
+            std::fs::read(dir.0.join("recovery.json")).unwrap(),
+            b"{broken"
+        );
+        assert_eq!(
+            std::fs::read(dir.0.join("workspace.json")).unwrap(),
+            b"{broken state"
+        );
+    }
+    #[test]
+    fn invalid_recovery_document_is_reported_and_preserved() {
+        let dir = RecoveryDirectory::new();
+        let store = WorkspaceStore::at(dir.0.clone());
+        let mut snapshot = captured_draft(&dir);
+        snapshot.document.blocks.clear();
+        // Write invalid data directly to model a damaged file, bypassing app validation.
+        std::fs::create_dir_all(&dir.0).unwrap();
+        let bytes = serde_json::to_vec(&serde_json::json!({"schema_version": 1, "data": snapshot}))
+            .unwrap();
+        std::fs::write(dir.0.join("recovery.json"), &bytes).unwrap();
+        let app = FolioApp::with_workspace_store(store);
+        assert!(app.pending_recovery.is_none());
+        assert!(
+            app.error
+                .as_ref()
+                .unwrap()
+                .contains("Invalid recovered document")
+        );
+        assert!(
+            app.workspace_store
+                .as_ref()
+                .unwrap()
+                .save_recovery(&captured_draft(&dir))
+                .is_err()
+        );
+        assert_eq!(std::fs::read(dir.0.join("recovery.json")).unwrap(), bytes);
+    }
+    #[test]
+    fn failed_startup_discard_retains_prompt_and_snapshot() {
+        let dir = RecoveryDirectory::new();
+        let store = WorkspaceStore::at(dir.0.clone());
+        store.save_recovery(&captured_draft(&dir)).unwrap();
+        let mut app = FolioApp::with_workspace_store(store);
+        std::fs::remove_file(dir.0.join("recovery.json")).unwrap();
+        std::fs::create_dir(dir.0.join("recovery.json")).unwrap();
+        assert!(!app.discard_startup_recovery());
+        assert!(app.pending_recovery.is_some());
+        assert!(app.error.is_some());
+        assert!(!app.editor.is_dirty());
     }
     #[test]
     fn recovery_snapshot_round_trips_warning_guard_and_selection() {

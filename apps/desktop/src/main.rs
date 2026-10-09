@@ -43,6 +43,7 @@ struct FolioApp {
     notice: String,
     pending: Option<Pending>,
     open_target: Option<PathBuf>,
+    observed_caret: Option<(PathBuf, Position)>,
     overwrite: Option<PathBuf>,
     search_open: bool,
     focus_search: bool,
@@ -85,6 +86,7 @@ impl Default for FolioApp {
             notice: String::new(),
             pending: None,
             open_target: None,
+            observed_caret: None,
             overwrite: None,
             search_open: false,
             focus_search: false,
@@ -300,10 +302,32 @@ impl FolioApp {
     }
     fn capture_caret(&mut self) {
         let Some(path) = self.path.as_deref() else {
+            self.observed_caret = None;
             return;
         };
+        let position = self.editor.selection().focus;
+        if self
+            .observed_caret
+            .as_ref()
+            .is_some_and(|(observed_path, observed_position)| {
+                observed_path == path && *observed_position == position
+            })
+        {
+            return;
+        }
         if let Ok(stored) = StoredPath::from_path(path) {
-            let position = self.editor.selection().focus;
+            self.observed_caret = Some((path.to_path_buf(), position));
+            // Aliases share one document history. Update every accessible alias so an
+            // older exact-path entry cannot override the latest editing position.
+            for caret in &mut self.workspace_state.carets {
+                if caret
+                    .path
+                    .to_path()
+                    .is_ok_and(|other| files::same_file(path, &other))
+                {
+                    caret.position = position;
+                }
+            }
             if self.workspace_state.caret_for(&stored) != Some(position) {
                 self.workspace_state.set_caret(stored, position);
             }
@@ -2456,13 +2480,46 @@ mod app_tests {
             app.editor.selection(),
             Selection::caret(Position::new(0, 5))
         );
+        app.new_document().unwrap();
         app.workspace_state
             .set_caret(StoredPath::from_path(&path).unwrap(), Position::new(0, 7));
-        app.new_document().unwrap();
         app.open_path(&path).unwrap();
         assert_eq!(
             app.editor.selection(),
             Selection::caret(Position::new(0, 0))
+        );
+    }
+    #[test]
+    fn alias_caret_history_returns_to_original_at_latest_position() {
+        let dir = RecoveryDirectory::new();
+        let mut app = dir.app();
+        app.insert("abcdef".into());
+        std::fs::create_dir_all(&dir.0).unwrap();
+        let original = dir.0.join("original.docx");
+        app.save_document(original.clone()).unwrap();
+        let alias = dir.0.join("alias.docx");
+        std::fs::hard_link(&original, &alias).unwrap();
+        app.editor
+            .set_selection(Selection::caret(Position::new(0, 2)))
+            .unwrap();
+        app.schedule_checkpoints(Instant::now());
+        app.open_path(&alias).unwrap();
+        app.editor
+            .set_selection(Selection::caret(Position::new(0, 5)))
+            .unwrap();
+        app.schedule_checkpoints(Instant::now());
+        let missing = StoredPath::from_path(&dir.0.join("disconnected.docx")).unwrap();
+        app.workspace_state
+            .set_caret(missing.clone(), Position::new(8, 9));
+        app.new_document().unwrap();
+        app.open_path(&original).unwrap();
+        assert_eq!(
+            app.editor.selection(),
+            Selection::caret(Position::new(0, 5))
+        );
+        assert_eq!(
+            app.workspace_state.caret_for(&missing),
+            Some(Position::new(8, 9))
         );
     }
     #[test]

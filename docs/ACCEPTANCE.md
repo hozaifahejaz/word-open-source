@@ -17,7 +17,7 @@ for this increment; earlier native evidence below remains historical.
 | Automated check | Observed result |
 | --- | --- |
 | `cargo fmt --all -- --check` | PASS, exit 0 |
-| `cargo test --workspace --offline --locked` | PASS: 27 core commands + 5 core recovery + 87 desktop + 23 DOCX = 142 passed; 0 failed; one manual desktop benchmark ignored |
+| `cargo test --workspace --offline --locked` | PASS: 29 core commands + 5 core recovery + 88 desktop + 23 DOCX = 145 passed; 0 failed; one manual desktop benchmark ignored |
 | `cargo clippy --workspace --all-targets --offline --locked -- -D warnings` | PASS, exit 0 |
 
 Focused tests cover legacy literal case-sensitive compatibility, Unicode lowercase
@@ -36,7 +36,18 @@ case-sensitive command. Regex search is deferred.
 An initial full test run passed with one test-helper `unused_must_use` warning;
 the initial clippy run rejected that warning. Explicitly consuming the egui pass
 output resolved it; the final full suite and clippy run above have no warnings.
-Logs: `build/validation/search-task-1-tests.log` (ignored local artifact).
+Logs: `build/validation/search-task-1-tests.log` and
+`build/validation/search-task-1-review-1-tests.log` (ignored local artifacts).
+
+Round 1 review regression checks also prove that rejecting the candidate at 1..4
+in `ba a a` does not suppress the valid whole-word `a a` range at 3..6;
+option-aware Replace all produces `ba XX` and Undo restores the original.
+Accepted matches remain non-overlapping. Both Match case settings are covered.
+The result list now virtualizes rows and caches each visible paragraph preview
+within the frame. A real egui accessibility-output check bounds constructed
+result widgets for 200 matches to viewport rows, then scrolls to result 200 and
+verifies selection, reveal, current counter, and unchanged document/dirty state.
+The final counts above include these three review regression tests.
 
 ## Workspace/recovery increment — 2026-10-10
 

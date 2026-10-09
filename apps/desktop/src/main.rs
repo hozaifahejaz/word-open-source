@@ -1741,18 +1741,28 @@ impl FolioApp {
                 let matches = self.search_matches().unwrap_or_default();
                 let current = matches.iter().position(|s| s.ordered() == self.editor.selection().ordered());
                 ui.label(format!("{} of {}", current.map_or(0, |i| i + 1), matches.len()));
+                let row_height = ui.spacing().interact_size.y;
                 egui::ScrollArea::vertical()
                     .id_salt("find-results")
                     .max_height(96.0)
-                    .show(ui, |ui| {
-                        for (index, selection) in matches.iter().enumerate() {
+                    .show_rows(ui, row_height, matches.len(), |ui, rows| {
+                        // Only visible rows build widgets; each visible paragraph
+                        // is concatenated and abbreviated once per result frame.
+                        let mut previews = std::collections::HashMap::new();
+                        for index in rows {
                             use unicode_segmentation::UnicodeSegmentation;
-                            let text = self.editor.document().paragraph(selection.anchor.block).unwrap().text();
-                            let preview: String = text.graphemes(true).take(80).collect();
+                            let selection = matches[index];
+                            let preview = previews.entry(selection.anchor.block).or_insert_with(|| {
+                                let text = self.editor.document().paragraph(selection.anchor.block).unwrap().text();
+                                text.graphemes(true).take(80).collect::<String>()
+                            });
                             let label = format!("{}. Paragraph {}: {}", index + 1, selection.anchor.block + 1, preview);
-                            let response = ui.selectable_label(current == Some(index), label);
+                            let response = ui.add_sized(
+                                Vec2::new(ui.available_width(), row_height),
+                                egui::Button::selectable(current == Some(index), label).truncate(),
+                            );
                             if response.clicked() {
-                                self.select_search_match(*selection);
+                                self.select_search_match(selection);
                                 ctx.request_repaint();
                             }
                         }
@@ -4269,6 +4279,64 @@ mod app_tests {
             let _ = ctx.end_pass();
         }
         requested_reveal
+    }
+    #[test]
+    fn search_results_virtualize_and_scrolled_rows_remain_selectable() {
+        let ctx = egui::Context::default();
+        layout::install_fonts(&ctx);
+        ctx.enable_accesskit();
+        let mut app = FolioApp {
+            search_open: true,
+            needle: "hit".into(),
+            ..Default::default()
+        };
+        app.insert("hit ".repeat(200));
+        app.editor.mark_saved();
+        let original = app.editor.document().clone();
+        frame(&mut app, &ctx, vec![]);
+        let output = frame(&mut app, &ctx, vec![]);
+        let rows: Vec<_> = output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .unwrap()
+            .nodes
+            .iter()
+            .filter_map(|(_, node)| node.label())
+            .filter(|label| label.contains(". Paragraph 1: "))
+            .collect();
+        assert!(!rows.is_empty());
+        assert!(
+            rows.len() <= 12,
+            "only viewport rows should produce widgets, got {}",
+            rows.len()
+        );
+        let preview = "hit ".repeat(20);
+        let first = format!("1. Paragraph 1: {preview}");
+        let last = format!("200. Paragraph 1: {preview}");
+        let pos = search_text_position(&output, &first);
+        for _ in 0..3 {
+            frame(
+                &mut app,
+                &ctx,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: Vec2::new(0.0, -10000.0),
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        assert!(click_search_text(&mut app, &ctx, &last));
+        assert_eq!(
+            app.editor.selection(),
+            Selection::new(Position::new(0, 796), Position::new(0, 799))
+        );
+        search_text_position(&frame(&mut app, &ctx, vec![]), "200 of 200");
+        assert_eq!(app.editor.document(), &original);
+        assert!(!app.editor.is_dirty());
     }
     #[test]
     fn search_options_refresh_and_results_navigate_through_egui() {

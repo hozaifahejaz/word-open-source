@@ -503,8 +503,14 @@ impl Document {
                 }
                 (lowered, endpoints)
             };
-            for (offset, matched) in search_text.match_indices(&query) {
-                let end = offset + matched.len();
+            let mut search_from = 0;
+            while let Some(relative) = search_text[search_from..].find(&query) {
+                let offset = search_from + relative;
+                let candidate_end = offset + query.len();
+                // A rejected range must not consume later candidate starts.
+                // Advance by one scalar unless the complete range is accepted.
+                search_from = offset + search_text[offset..].chars().next().unwrap().len_utf8();
+                let end = candidate_end;
                 let (start, end) = if options.match_case {
                     (offset, end)
                 } else {
@@ -528,6 +534,7 @@ impl Document {
                         Position::new(block, start),
                         Position::new(block, end),
                     ));
+                    search_from = candidate_end;
                 }
             }
         }

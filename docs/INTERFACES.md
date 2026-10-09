@@ -108,8 +108,9 @@ uses the same matching/range contract. Defaults are `match_case: true` and
 `whole_words: false`. Insensitive comparison uses Unicode scalar lowercase
 mappings and maps complete matches back to original grapheme boundaries; partial
 lowercase expansions are excluded. Whole words uses UAX #29 boundaries in the
-original paragraph. Regex, Unicode normalization and locale-specific/full case
-folding remain deferred. Both replace-all commands use the original matches and
+original paragraph. Rejected boundary candidates do not consume later candidate
+starts; only accepted match ranges are non-overlapping. Regex, Unicode
+normalization and locale-specific/full case folding remain deferred. Both replace-all commands use the original matches and
 do not rescan replacement text. Existing MCP callers retain `ReplaceAll` behavior.
 
 ```rust

@@ -752,3 +752,46 @@ fn options_replace_all_is_atomic_and_one_undo_step_with_original_offsets() {
         ("x i\u{307} x2".into(), "x".into())
     );
 }
+
+#[test]
+fn rejected_whole_word_candidate_does_not_hide_later_overlapping_match() {
+    for match_case in [true, false] {
+        let options = SearchOptions {
+            match_case,
+            whole_words: true,
+        };
+        let d = editor(&["ba a a"]).document().clone();
+        assert_eq!(
+            d.find_with_options("a a", options).unwrap(),
+            vec![range((0, 3), (0, 6))]
+        );
+        // Accepted results still consume their range and never overlap.
+        let d = editor(&["a a a"]).document().clone();
+        assert_eq!(
+            d.find_with_options("a a", options).unwrap(),
+            vec![range((0, 0), (0, 3))]
+        );
+    }
+}
+#[test]
+fn replace_all_finds_valid_overlap_after_rejected_whole_word_candidate() {
+    for match_case in [true, false] {
+        let mut e = editor(&["ba a a"]);
+        let original = e.document().clone();
+        let result = e
+            .execute(Command::ReplaceAllWithOptions {
+                needle: "a a".into(),
+                replacement: "XX".into(),
+                options: SearchOptions {
+                    match_case,
+                    whole_words: true,
+                },
+            })
+            .unwrap();
+        assert_eq!(result.replacements, 1);
+        assert_eq!(text(&e, 0), "ba XX");
+        e.execute(Command::Undo).unwrap();
+        assert_eq!(e.document(), &original);
+        assert!(!e.is_dirty());
+    }
+}

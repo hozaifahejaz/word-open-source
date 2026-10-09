@@ -1,0 +1,7 @@
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Georgia" w:hAnsi="Georgia"/><w:sz w:val="22"/><w:color w:val="102030"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="80"/></w:pPr></w:pPrDefault></w:docDefaults>
+<w:style w:type="paragraph" w:styleId="Base" w:default="1"><w:name w:val="Base"/><w:pPr><w:jc w:val="center"/></w:pPr><w:rPr><w:b/><w:i/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="Child"><w:basedOn w:val="Base"/><w:pPr><w:spacing w:before="60"/></w:pPr><w:rPr><w:b/><w:sz w:val="28"/></w:rPr></w:style>
+<w:style w:type="character" w:styleId="Emphasis"><w:rPr><w:u w:val="single"/><w:color w:val="ABCDEF"/></w:rPr></w:style>
+<w:style w:type="character" w:styleId="EmphasisChild"><w:basedOn w:val="Emphasis"/><w:rPr><w:rFonts w:ascii="Noto Serif" w:hAnsi="Noto Serif"/></w:rPr></w:style>
+</w:styles>

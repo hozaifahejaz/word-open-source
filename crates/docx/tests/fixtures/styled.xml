@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><q:body>
+<q:p><q:pPr><q:jc q:val="center"/><q:spacing q:before="120" q:after="240" q:line="360" q:lineRule="auto"/></q:pPr><q:r><q:rPr><q:b/><q:i/><q:u q:val="single"/><q:rFonts q:ascii="Noto Sans" q:hAnsi="Noto Sans"/><q:sz q:val="29"/><q:color q:val="1A2B3C"/></q:rPr><q:t xml:space="preserve">  Café &amp; &lt;你好&gt; é 👩‍👩‍👧‍👦 </q:t><q:tab/><q:t>اردو</q:t><q:br q:type="page"/><q:t>after break</q:t></q:r></q:p>
+<q:p><q:pPr><q:jc q:val="both"/><q:spacing q:line="420" q:lineRule="exact"/></q:pPr><q:r><q:t>Justified</q:t></q:r></q:p>
+<q:p><q:pPr><q:jc q:val="right"/><q:spacing q:line="360" q:lineRule="atLeast"/></q:pPr></q:p>
+<q:sectPr><q:pgSz q:w="15840" q:h="12240" q:orient="landscape"/><q:pgMar q:top="720" q:right="800" q:bottom="900" q:left="1000"/></q:sectPr>
+</q:body></q:document>

@@ -1,0 +1,11 @@
+[package]
+name = "document-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "UI-independent rich text model and editing commands for Folio"
+
+[dependencies]
+unicode-segmentation.workspace = true

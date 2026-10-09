@@ -1,0 +1,7 @@
+.tools/
+**/.tools/
+target/
+**/target/
+dist/
+build/
+.DS_Store

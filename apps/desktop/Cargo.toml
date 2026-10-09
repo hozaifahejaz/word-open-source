@@ -1,0 +1,15 @@
+[package]
+name = "folio-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Folio native paginated rich-text editor"
+
+[dependencies]
+document-core.workspace = true
+folio-docx.workspace = true
+egui.workspace = true
+eframe.workspace = true
+rfd.workspace = true

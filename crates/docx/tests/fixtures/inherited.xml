@@ -1,0 +1,4 @@
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:pPr><w:pStyle w:val="Child"/><w:spacing w:after="100"/><w:rPr><w:sz w:val="32"/></w:rPr></w:pPr><w:r><w:rPr><w:rStyle w:val="EmphasisChild"/><w:i w:val="false"/></w:rPr><w:t>Inherited</w:t></w:r><w:r><w:t> base</w:t></w:r></w:p>
+<w:p><w:r><w:t>Default paragraph style</w:t></w:r></w:p>
+</w:body></w:document>

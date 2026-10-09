@@ -2,8 +2,10 @@
 
 Native Rust egui/eframe editor with Folio branding, File/Home/Layout/View ribbon,
 quick-access actions, editable paginated paper, and page/word/character/zoom status.
-Original line icons accompany labeled buttons, with tooltips and keyboard focus.
-The light theme groups text and paragraph tools, highlights Save, and wraps
+Original line icons use compact controls for frequent actions, retaining accessible
+names, tooltips and keyboard focus. The minimalist light theme combines a serif
+wordmark, muted indigo accents, borderless tools and a softly elevated paper canvas.
+Home consolidates clipboard, text and alignment tools, highlights Save, and wraps
 controls in narrow windows. Import warnings include a direct converted-copy action.
 The document canvas is a custom rich-text widget, not a plain-text widget plus
 preview. Every paragraph is shaped once into styled egui glyph rows. The composed

@@ -4,6 +4,9 @@ Project author: hozaifahejaz.
 
 ## Unreleased
 
+- Refresh the desktop with compact icon tools, a serif Folio wordmark, muted
+  indigo accents, borderless controls, subtle paper shadows and more writing space.
+  Icon-only actions retain accessible names, selected states and tooltips.
 - Add original line icons alongside labeled ribbon buttons and tooltips.
 - Add native clipboard toolbar actions and undoable clear-text-formatting.
 - Expose exact/minimum line heights, preserving imported values and applying

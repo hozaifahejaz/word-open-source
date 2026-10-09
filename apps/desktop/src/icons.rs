@@ -271,6 +271,7 @@ pub struct IconButton<'a> {
     label: &'a str,
     selected: Option<bool>,
     primary: bool,
+    compact: bool,
 }
 impl<'a> IconButton<'a> {
     pub fn new(icon: Icon, label: &'a str) -> Self {
@@ -279,6 +280,7 @@ impl<'a> IconButton<'a> {
             label,
             selected: None,
             primary: false,
+            compact: false,
         }
     }
     pub fn selected(mut self, selected: bool) -> Self {
@@ -289,14 +291,23 @@ impl<'a> IconButton<'a> {
         self.primary = true;
         self
     }
+    /// Show just the icon while retaining its accessible label and tooltip.
+    pub fn compact(mut self) -> Self {
+        self.compact = true;
+        self
+    }
 }
 impl Widget for IconButton<'_> {
     fn ui(self, ui: &mut Ui) -> Response {
         let padding = ui.spacing().button_padding;
         let icon_size = 16.0;
-        let gap = 7.0;
+        let gap = if self.compact { 0.0 } else { 7.0 };
         let galley = ui.painter().layout_no_wrap(
-            self.label.to_owned(),
+            if self.compact {
+                String::new()
+            } else {
+                self.label.to_owned()
+            },
             egui::TextStyle::Button.resolve(ui.style()),
             Color32::PLACEHOLDER,
         );
@@ -321,7 +332,7 @@ impl Widget for IconButton<'_> {
                 (
                     visuals.weak_bg_fill,
                     visuals.bg_stroke,
-                    ui.visuals().text_color(),
+                    visuals.fg_stroke.color,
                 )
             };
             ui.painter().rect(
@@ -353,6 +364,6 @@ impl Widget for IconButton<'_> {
                 color,
             );
         }
-        response
+        response.on_hover_text(self.label)
     }
 }

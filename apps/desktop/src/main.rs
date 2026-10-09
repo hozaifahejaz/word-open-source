@@ -487,7 +487,7 @@ impl FolioApp {
     fn ribbon(&mut self, ctx: &egui::Context) {
         let frame = egui::Frame::new()
             .fill(Color32::WHITE)
-            .inner_margin(egui::Margin::symmetric(16, 12));
+            .inner_margin(egui::Margin::symmetric(24, 12));
         let panel = egui::TopBottomPanel::top("ribbon").frame(frame);
         panel.show(ctx, |ui| {
             if self.pending.is_some() || self.overwrite.is_some() || self.error.is_some() {
@@ -495,10 +495,12 @@ impl FolioApp {
             }
             ui.horizontal_wrapped(|ui| {
                 ui.label(
-                    egui::RichText::new("FOLIO")
-                        .strong()
-                        .color(theme::ACCENT)
-                        .size(22.0),
+                    egui::RichText::new("folio.")
+                        .font(egui::FontId::new(
+                            26.0,
+                            egui::FontFamily::Name("Serif-Regular".into()),
+                        ))
+                        .color(theme::INK),
                 );
                 ui.separator();
                 for (label, action, enabled) in [
@@ -514,7 +516,7 @@ impl FolioApp {
                     let button = if action == Action::Save {
                         IconButton::new(Icon::Save, label).primary()
                     } else {
-                        IconButton::new(Icon::for_action(action), label)
+                        IconButton::new(Icon::for_action(action), label).compact()
                     };
                     let command = if cfg!(target_os = "macos") {
                         "⌘"
@@ -546,7 +548,7 @@ impl FolioApp {
                     .unwrap_or("Untitled".into());
                 ui.add(egui::Label::new(egui::RichText::new(name).strong()).truncate());
                 if self.editor.is_dirty() {
-                    ui.colored_label(theme::ACCENT, "Edited");
+                    ui.colored_label(theme::MUTED, "• Unsaved");
                 }
             });
             ui.add_space(4.0);
@@ -584,7 +586,6 @@ impl FolioApp {
                 }
                 Tab::Home => {
                     ui.horizontal_wrapped(|ui| {
-                        ui.label(egui::RichText::new("Clipboard").small().color(theme::MUTED));
                         for (label, action, key) in [
                             ("Cut", Action::Cut, "X"),
                             ("Copy", Action::Copy, "C"),
@@ -600,7 +601,7 @@ impl FolioApp {
                             if ui
                                 .add_enabled(
                                     enabled,
-                                    IconButton::new(Icon::for_action(action), label),
+                                    IconButton::new(Icon::for_action(action), label).compact(),
                                 )
                                 .on_hover_text(format!("{label} ({command}{key})"))
                                 .clicked()
@@ -610,7 +611,10 @@ impl FolioApp {
                         }
                         ui.separator();
                         if ui
-                            .add(IconButton::new(Icon::ClearFormatting, "Clear formatting"))
+                            .add(
+                                IconButton::new(Icon::ClearFormatting, "Clear formatting")
+                                    .compact(),
+                            )
                             .on_hover_text(
                                 "Reset text to Noto Sans, 12 pt, black; keep paragraph layout",
                             )
@@ -618,9 +622,7 @@ impl FolioApp {
                         {
                             self.action(Action::ClearFormatting, ctx);
                         }
-                    });
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(egui::RichText::new("Text").small().color(theme::MUTED));
+                        ui.separator();
                         let style = self.current_style();
                         for (label, selected, action) in [
                             ("Bold", style.bold, Action::Bold),
@@ -630,7 +632,8 @@ impl FolioApp {
                             if ui
                                 .add(
                                     IconButton::new(Icon::for_action(action), label)
-                                        .selected(selected),
+                                        .selected(selected)
+                                        .compact(),
                                 )
                                 .on_hover_text(format!("Toggle {label}"))
                                 .clicked()
@@ -671,12 +674,16 @@ impl FolioApp {
                                 }
                             });
                         self.font_size_control(ui, &style);
-                        ui.label("Text color");
+
                         let mut rgb = [style.color.red, style.color.green, style.color.blue];
                         if ui
-                            .color_edit_button_srgb(&mut rgb)
-                            .on_hover_text("Text color")
-                            .changed()
+                            .scope(|ui| {
+                                ui.spacing_mut().interact_size = Vec2::splat(22.0);
+                                ui.color_edit_button_srgb(&mut rgb)
+                                    .on_hover_text("Text color")
+                                    .changed()
+                            })
+                            .inner
                         {
                             self.format(StylePatch {
                                 color: Some(Color::rgb(rgb[0], rgb[1], rgb[2])),
@@ -684,7 +691,7 @@ impl FolioApp {
                             });
                         }
                         ui.separator();
-                        ui.label(egui::RichText::new("Paragraph").small().color(theme::MUTED));
+
                         let alignment = self
                             .editor
                             .document()
@@ -705,7 +712,11 @@ impl FolioApp {
                                 Alignment::Justify => Icon::AlignJustify,
                             };
                             if ui
-                                .add(IconButton::new(icon, label).selected(alignment == value))
+                                .add(
+                                    IconButton::new(icon, label)
+                                        .selected(alignment == value)
+                                        .compact(),
+                                )
                                 .on_hover_text(format!("Align paragraph {label}"))
                                 .clicked()
                             {
@@ -1166,7 +1177,7 @@ impl FolioApp {
             .visual_line(self.editor.selection().focus, self.visual_line)
             .map_or(1, |i| layout.lines[i].page + 1);
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(theme::WORKSPACE).inner_margin(16.0))
+            .frame(egui::Frame::new().fill(theme::WORKSPACE).inner_margin(24.0))
             .show(ctx, |ui| {
                 if self.pending.is_some() || self.overwrite.is_some() || self.error.is_some() {
                     ui.disable();
@@ -1247,9 +1258,9 @@ impl FolioApp {
                         for (i, page) in layout.pages.iter().enumerate() {
                             let page = page.translate(origin.to_vec2());
                             painter.rect_filled(
-                                page.translate(Vec2::new(3.0, 4.0)),
-                                2.0,
-                                Color32::from_black_alpha(30),
+                                page.translate(Vec2::new(0.0, 6.0)).expand(2.0),
+                                4.0,
+                                Color32::from_black_alpha(8),
                             );
                             painter.rect_filled(page, 1.0, Color32::WHITE);
                             painter.rect_stroke(
@@ -1270,7 +1281,7 @@ impl FolioApp {
                             painter.rect_filled(
                                 rect.translate(origin.to_vec2()),
                                 0.0,
-                                Color32::from_rgba_unmultiplied(54, 130, 153, 75),
+                                theme::TEXT_SELECTION,
                             );
                         }
                         for line in &layout.lines {

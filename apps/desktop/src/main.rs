@@ -4,6 +4,7 @@ mod icons;
 mod layout;
 mod mcp;
 mod theme;
+mod workspace;
 use document_core::*;
 use editing::{Action, move_to};
 use egui::{Color32, Key, Rect, Stroke, Vec2};

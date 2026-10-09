@@ -60,7 +60,7 @@ impl Drop for Temporary {
         let _ = fs::remove_file(&self.0);
     }
 }
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
+pub(super) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())

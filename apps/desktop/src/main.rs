@@ -241,13 +241,13 @@ impl FolioApp {
         if self.workspace_state == self.saved_workspace {
             return true;
         }
-        if let Some(store) = &self.workspace_store {
-            if let Err(error) = store.save_state(&self.workspace_state) {
-                self.error = Some(format!(
-                    "Could not save workspace preferences: {error}. Check the application data directory and try again."
-                ));
-                return false;
-            }
+        if let Some(store) = &self.workspace_store
+            && let Err(error) = store.save_state(&self.workspace_state)
+        {
+            self.error = Some(format!(
+                "Could not save workspace preferences: {error}. Check the application data directory and try again."
+            ));
+            return false;
         }
         self.saved_workspace = self.workspace_state.clone();
         true
@@ -302,12 +302,12 @@ impl FolioApp {
         }
     }
     fn clear_recovery(&mut self) -> bool {
-        if let Some(store) = &self.workspace_store {
-            if let Err(error) = store.clear_recovery() {
-                self.error = Some(format!("Could not clear recovery: {error}"));
-                self.recovery_cleanup_pending = true;
-                return false;
-            }
+        if let Some(store) = &self.workspace_store
+            && let Err(error) = store.clear_recovery()
+        {
+            self.error = Some(format!("Could not clear recovery: {error}"));
+            self.recovery_cleanup_pending = true;
+            return false;
         }
         self.last_recovery_document = None;
         self.recovery_cleanup_pending = false;
@@ -407,10 +407,10 @@ impl FolioApp {
         self.request(Pending::Open, ctx);
     }
     fn accept_open_choice(&mut self, path: Option<PathBuf>) {
-        if let Some(path) = path {
-            if let Err(error) = self.open_path(&path) {
-                self.error = Some(format!("Could not open {}: {error}", path.display()));
-            }
+        if let Some(path) = path
+            && let Err(error) = self.open_path(&path)
+        {
+            self.error = Some(format!("Could not open {}: {error}", path.display()));
         }
     }
     fn open_document(&mut self, path: PathBuf) -> Result<(), String> {
@@ -507,11 +507,13 @@ impl FolioApp {
             .recovery_checkpoint
             .changed_at
             .map(|t| t + Duration::from_secs(2));
-        if eligible && self.pending.is_none() && self.overwrite.is_none() {
-            if let Some(changed) = self.autosave_checkpoint.changed_at {
-                let save_at = changed + Duration::from_secs(5);
-                deadline = Some(deadline.map_or(save_at, |recovery| recovery.min(save_at)));
-            }
+        if eligible
+            && self.pending.is_none()
+            && self.overwrite.is_none()
+            && let Some(changed) = self.autosave_checkpoint.changed_at
+        {
+            let save_at = changed + Duration::from_secs(5);
+            deadline = Some(deadline.map_or(save_at, |recovery| recovery.min(save_at)));
         }
         if let Some(changed) = self.state_checkpoint.changed_at {
             let state_at = changed + Duration::from_millis(500);

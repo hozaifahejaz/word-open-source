@@ -1072,12 +1072,17 @@ dependencies = [
  "document-core",
  "eframe",
  "egui",
+ "flate2",
  "folio-docx",
+ "pdf-writer",
+ "quick-xml 0.38.3",
  "rand",
  "rfd",
  "serde",
  "serde_json",
+ "ttf-parser",
  "unicode-segmentation",
+ "zip",
 ]
 
 [[package]]
@@ -2136,6 +2141,18 @@ dependencies = [
  "redox_syscall 0.5.18",
  "smallvec",
  "windows-link 0.2.1",
+]
+
+[[package]]
+name = "pdf-writer"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f5e456864a7a304047bff84977dc6fb162bd956475d40ba50b2dcecaada7f753"
+dependencies = [
+ "bitflags 2.13.2",
+ "itoa",
+ "memchr",
+ "ryu",
 ]
 
 [[package]]

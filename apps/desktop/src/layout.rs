@@ -161,11 +161,15 @@ impl DocumentLayout {
             job.wrap.max_width = content_width;
             job.justify = p.style.alignment == Alignment::Justify;
             if p.runs.is_empty() {
-                job.append(
-                    "",
-                    0.0,
-                    format(&p.default_style, p.style.line_spacing, zoom),
-                );
+                let empty_format = format(&p.default_style, p.style.line_spacing, zoom);
+                // Empty sections have no byte overlap for the per-row correction
+                // below. Reserve their base row before shaping so typing/deleting
+                // the first script character keeps caret and paragraph geometry.
+                job.first_row_min_height = empty_format.line_height.unwrap_or(0.0);
+                if p.default_style.vertical_align != VerticalAlign::Baseline {
+                    job.first_row_min_height /= 0.75;
+                }
+                job.append("", 0.0, empty_format);
             }
             for run in &p.runs {
                 job.append(
@@ -437,6 +441,67 @@ impl DocumentLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn rich_empty_script_paragraph_keeps_base_row_as_first_character_is_inserted_and_deleted() {
+        for align in [
+            VerticalAlign::Baseline,
+            VerticalAlign::Superscript,
+            VerticalAlign::Subscript,
+        ] {
+            for zoom in [0.75, 1.0, 1.5] {
+                let style = TextStyle {
+                    vertical_align: align,
+                    ..Default::default()
+                };
+                let document = Document {
+                    blocks: vec![
+                        Block::Paragraph(Paragraph {
+                            default_style: style.clone(),
+                            ..Default::default()
+                        }),
+                        Block::Paragraph(Paragraph::plain("following")),
+                    ],
+                    ..Default::default()
+                };
+                let mut editor = Editor::new(document).unwrap();
+                let before = editor.document().clone();
+                editor
+                    .execute(Command::InsertText {
+                        at: Position::default(),
+                        text: "x".into(),
+                        style: None,
+                    })
+                    .unwrap();
+                let inserted = editor.document().clone();
+                assert_eq!(inserted.paragraph(0).unwrap().runs[0].style, style);
+                editor
+                    .execute(Command::Delete {
+                        selection: Selection::new(Position::default(), Position::new(0, 1)),
+                    })
+                    .unwrap();
+                assert_eq!(editor.document(), &before);
+                with_layout(&before, zoom, |blank| {
+                    with_layout(&inserted, zoom, |typed| {
+                        assert_eq!(
+                            blank.lines[0].rect.height(),
+                            typed.lines[0].rect.height(),
+                            "{align:?} at zoom {zoom}"
+                        );
+                        assert_eq!(
+                            blank.caret(Position::default()),
+                            typed.caret(Position::default())
+                        );
+                        assert_eq!(blank.lines[1].rect.top(), typed.lines[1].rect.top());
+                        assert_eq!(blank.lines[0].stops.len(), 1);
+                        assert_eq!(
+                            blank.hit(blank.lines[0].rect.center()),
+                            Some(Position::default())
+                        );
+                    });
+                });
+            }
+        }
+    }
     #[test]
     fn rich_scripts_have_real_vertical_offsets_and_grapheme_safe_hits() {
         for zoom in [0.75, 1.0, 1.5] {

@@ -62,7 +62,7 @@ and build; published help scopes are recorded below without invented build numbe
 | Printing/PDF | Partial | PDF copy export follows document pagination and supported text styling; native printing deferred | Desktop |
 | Accessibility | Partial | eframe backend enabled; custom editing semantics/screen-reader checks/audit pending | Desktop/web |
 | Automation/add-ins | Partial | 20 MCP tools for live/background documents; no VBA/macros/Office add-ins execution | [MCP setup](MCP.md); Desktop/web |
-| Legacy/other formats | Deferred | No .doc, .docm, .dot/.dotx, RTF or ODT codec | MS-DOC; ECMA |
+| Legacy/other formats | Partial | ODT/RTF export available; their import and .doc, .docm, .dot/.dotx codecs deferred | MS-DOC; ECMA |
 | Cloud/AI | Deferred | No OneDrive/accounts, online services, dictation or AI assistant | Create document; Mobile Copilot |
 | Browser/mobile | Deferred | Windows/macOS/Linux native first; web/iOS/Android front ends later | Web service; Mobile Copilot |
 
@@ -211,8 +211,10 @@ picker describes fidelity before opening the native destination chooser. Every
 format exports the whole document; the existing Export selection… remains TXT.
 Extension mismatches, source aliases and unconfirmed overwrites are rejected.
 PDF is a fixed-page copy; unsupported font/glyph coverage fails visibly rather
-than dropping text. HTML carries print page settings with browser-dependent
-pagination. Markdown and text intentionally simplify styling and page geometry.
+than dropping text. PDF uses Folio's current layout; complex-script shaping and
+right-to-left layout retain the editor's existing limitations. HTML carries print
+page settings with browser-dependent pagination. Markdown and text intentionally
+simplify styling and page geometry.
 All exports preserve selection, history, path, dirty state and recovery.
 
 The Home ribbon keeps Clipboard, Font and Paragraph in compact labeled groups.

@@ -525,7 +525,21 @@ impl Widget for IconButton<'_> {
                 Pos2::new(rect.left() + padding.x, rect.center().y - icon_size * 0.5),
                 Vec2::splat(icon_size),
             );
-            self.icon.paint(ui.painter(), icon_rect, color);
+            let accent = if self.primary || !ui.is_enabled() {
+                color
+            } else {
+                match self.icon {
+                    Icon::Save | Icon::ExportText | Icon::ExportSelection => {
+                        Color32::from_rgb(72, 122, 202)
+                    }
+                    Icon::Cut | Icon::Copy | Icon::Paste => Color32::from_rgb(137, 107, 184),
+                    Icon::AlignLeft | Icon::AlignCenter | Icon::AlignRight | Icon::AlignJustify => {
+                        Color32::from_rgb(46, 146, 138)
+                    }
+                    _ => color,
+                }
+            };
+            self.icon.paint(ui.painter(), icon_rect, accent);
             ui.painter().galley(
                 Pos2::new(
                     icon_rect.right() + gap,

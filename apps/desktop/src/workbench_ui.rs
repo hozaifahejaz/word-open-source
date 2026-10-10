@@ -9,7 +9,8 @@ use egui::Key;
 use std::time::Instant;
 impl FolioApp {
     pub fn workbench_blocks_editing(&self) -> bool {
-        self.template_gallery
+        self.export_picker.is_some()
+            || self.template_gallery
             || self.workbench.palette
             || self.workbench.navigation.is_some()
             || self.workbench.snippets
@@ -72,6 +73,12 @@ impl FolioApp {
                 self.ime_enabled = false;
             }
             Tool::Duplicate => self.choose_export(crate::WriteOperation::Duplicate, ctx),
+            Tool::ExportDocument => {
+                self.export_picker = Some(crate::ExportFormat::Pdf);
+                self.focus_canvas = false;
+                self.composition = None;
+                self.ime_enabled = false;
+            }
             Tool::ExportText => self.choose_export(crate::WriteOperation::Text(None), ctx),
             Tool::ExportSelection => self.choose_export(
                 crate::WriteOperation::Text(Some(self.editor.selection())),
@@ -295,12 +302,45 @@ impl FolioApp {
         if self.workbench_blocks_editing()
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape))
         {
+            self.export_picker = None;
             self.template_gallery = false;
             self.workbench.palette = false;
             self.workbench.navigation = None;
             self.workbench.snippets = false;
             self.workbench.shortcuts = false;
             self.focus_canvas = true;
+            return;
+        }
+        if let Some(mut selected) = self.export_picker {
+            let mut destination = false;
+            let mut cancel = false;
+            egui::Modal::new(egui::Id::new("export_document_picker")).show(ctx, |ui| {
+                ui.set_width((ctx.screen_rect().width() - 64.).clamp(240., 480.));
+                ui.heading("Export document");
+                ui.label("Create a copy of the whole document. Choose the format that fits its destination.");
+                ui.separator();
+                for format in crate::export_formats::ALL {
+                    ui.horizontal(|ui| {
+                        ui.selectable_value(&mut selected, format, format.label());
+                        ui.weak(format!(".{}", format.extension()));
+                    });
+                }
+                ui.separator();
+                ui.label(selected.description());
+                ui.horizontal(|ui| {
+                    destination = ui.add(IconButton::new(Icon::ExportText, "Choose destination…").primary()).clicked();
+                    cancel = ui.add(IconButton::new(Icon::Close, "Cancel")).clicked();
+                });
+            });
+            self.export_picker = Some(selected);
+            if destination || cancel {
+                // Remove the modal guard before entering the native destination adapter.
+                self.export_picker = None;
+                if destination {
+                    self.choose_export(crate::WriteOperation::Format(selected), ctx);
+                }
+                self.focus_canvas = true;
+            }
             return;
         }
         if self.workbench.palette {

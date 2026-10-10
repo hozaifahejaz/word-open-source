@@ -1,7 +1,7 @@
 //! Shared visual treatment for the ribbon, paper workspace and status panels.
 use egui::{Color32, Context, FontId, Stroke, TextStyle, Vec2};
 
-pub const ACCENT: Color32 = Color32::from_rgb(62, 77, 131);
+pub const ACCENT: Color32 = Color32::from_rgb(64, 100, 174);
 pub const INK: Color32 = Color32::from_rgb(38, 42, 51);
 pub const MUTED: Color32 = Color32::from_rgb(107, 113, 127);
 pub const BORDER: Color32 = Color32::from_rgb(228, 230, 236);
@@ -130,6 +130,22 @@ pub fn text(dark: bool) -> Color32 {
         Color32::from_rgb(235, 237, 244)
     } else {
         INK
+    }
+}
+
+/// Quiet section colors keep the compact ribbon legible in both themes.
+pub fn font_group(dark: bool) -> Color32 {
+    if dark {
+        Color32::from_rgb(40, 38, 54)
+    } else {
+        Color32::from_rgb(246, 243, 251)
+    }
+}
+pub fn paragraph_group(dark: bool) -> Color32 {
+    if dark {
+        Color32::from_rgb(29, 46, 48)
+    } else {
+        Color32::from_rgb(237, 248, 247)
     }
 }
 

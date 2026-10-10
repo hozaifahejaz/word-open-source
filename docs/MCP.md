@@ -1,6 +1,6 @@
 # Folio MCP interface
 
-Folio exposes 19 document tools through the Model Context Protocol. Any AI
+Folio exposes 20 document tools through the Model Context Protocol. Any AI
 provider can use them through a client that supports local MCP servers over
 stdio. A model by itself needs a tool-calling host; Folio does not require an
 AI API key or send documents to a provider on its own.
@@ -78,6 +78,7 @@ You can configure live and background servers together with distinct names.
 | `folio_set_page_layout` | Set complete nominal page size, orientation and margins |
 | `folio_list_templates` | Read stable template IDs, names and descriptions |
 | `folio_duplicate_document` | Write a distinct DOCX copy without changing the active editor |
+| `folio_export_document` | Export whole document as PDF/DOCX/ODT/RTF/HTML/Markdown/TXT to a distinct absolute path |
 | `folio_export_text` | Export whole document or optional selection to a distinct UTF-8 TXT file |
 
 Discover the full argument schemas using `tools/list`. All editing ranges use:
@@ -183,3 +184,19 @@ and DOCX save/reopen using disposable documents and temporary paths. Append
 Protocol references: [MCP stdio transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports),
 [tools](https://modelcontextprotocol.io/specification/2025-11-25/server/tools), and
 [2026-07-28 schema](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/2026-07-28/schema.ts).
+
+### Full-document format export
+
+`folio_export_document` requires an absolute `path` with the explicit format
+extension and `format`: `pdf`, `docx`, `odt`, `rtf`, `html`, `markdown`, or `txt`.
+Markdown destinations use `.md`; all others use the named extension. `overwrite`
+defaults to false. Unknown fields/formats, relative paths, source aliases and
+protected import destinations are rejected. Read-only mode permits distinct
+copies. Open interaction dialogs, including the format picker, block this tool.
+
+PDF follows Folio's page layout and supported text styling. Editable formats
+preserve their supported semantic subset; browser pagination can differ for HTML.
+Markdown omits fonts, colors and paragraph geometry; text omits all formatting.
+Encoding or filesystem failures preserve editor content, selection, undo/redo,
+active path, dirty state, warnings and recovery. The existing selection-capable
+`folio_export_text` API is unchanged. No export marks the document saved.

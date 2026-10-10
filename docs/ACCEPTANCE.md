@@ -458,3 +458,16 @@ source alias protection. Real OS drag-and-drop, VoiceOver speech, Windows/Linux
 GUI, and Word/LibreOffice visual interoperability remain unverified. The broader
 roadmap still contains substantial deferred functionality; this release does not
 claim every requested feature is implemented.
+
+## Seven-format export and ribbon validation scope
+
+New focused automated checks cover all seven full-document export paths,
+unconfirmed/confirmed overwrites, failed filesystem destinations, extension and
+source protection, read-only copies, selection/history/dirty/recovery preservation,
+accessible format-picker controls and Escape cancellation. MCP checks cover strict
+unknown format/field handling, relative paths and modal guards. The compact ribbon
+geometry check bounds 1180-point windows to 112 points and 800-point windows to
+160 points. SDK background smoke calls all seven formats in a disposable directory,
+checks PDF/RTF/HTML signatures and DOCX/ODT ZIP contents, and compares the editor
+snapshot after each export. Live smoke does not export user documents. Final
+controller verification results are recorded after the completed build.

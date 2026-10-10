@@ -1,5 +1,8 @@
 mod editing;
+mod export_formats;
+mod export_pdf;
 mod files;
+use export_formats::ExportFormat;
 mod icons;
 mod layout;
 mod mcp;
@@ -38,11 +41,13 @@ enum WriteOperation {
     Save,
     Duplicate,
     Text(Option<Selection>),
+    Format(ExportFormat),
 }
 struct FolioApp {
     workbench: workbench::Workbench,
     read_only: bool,
     template_gallery: bool,
+    export_picker: Option<ExportFormat>,
     write_operation: WriteOperation,
     editor: Editor,
     path: Option<PathBuf>,
@@ -96,6 +101,7 @@ impl Default for FolioApp {
             workbench: workbench::Workbench::default(),
             read_only: false,
             template_gallery: false,
+            export_picker: None,
             write_operation: WriteOperation::Save,
             editor: Editor::default(),
             path: None,
@@ -646,6 +652,24 @@ impl FolioApp {
             overwrite,
         )
     }
+    pub fn export_document_to(
+        &mut self,
+        path: PathBuf,
+        format: ExportFormat,
+        overwrite: bool,
+    ) -> Result<(), String> {
+        self.ensure_recovery_resolved()?;
+        files::check_destination(&path, format.extension(), self.path.as_deref(), overwrite)?;
+        if self
+            .protected
+            .as_deref()
+            .is_some_and(|source| files::same_file(source, &path))
+        {
+            return Err("The warned import source is protected".into());
+        }
+        let bytes = export_formats::encode(self.editor.document(), format)?;
+        files::atomic_write(&path, &bytes)
+    }
     fn finish_write(&mut self, path: PathBuf, overwrite: bool, ctx: &egui::Context) {
         let result = match self.write_operation {
             WriteOperation::Save => {
@@ -654,6 +678,7 @@ impl FolioApp {
             }
             WriteOperation::Duplicate => self.duplicate_to(path, overwrite),
             WriteOperation::Text(selection) => self.export_text_to(path, selection, overwrite),
+            WriteOperation::Format(format) => self.export_document_to(path, format, overwrite),
         };
         match result {
             Ok(()) => {
@@ -665,10 +690,10 @@ impl FolioApp {
     }
     fn choose_export(&mut self, operation: WriteOperation, ctx: &egui::Context) {
         self.write_operation = operation;
-        let extension = if matches!(operation, WriteOperation::Duplicate) {
-            "docx"
-        } else {
-            "txt"
+        let extension = match operation {
+            WriteOperation::Duplicate | WriteOperation::Save => "docx",
+            WriteOperation::Text(_) => "txt",
+            WriteOperation::Format(format) => format.extension(),
         };
         let Some(mut path) = rfd::FileDialog::new()
             .add_filter(extension, &[extension])
@@ -1624,9 +1649,11 @@ impl FolioApp {
                     ("Layout", Tab::Layout),
                     ("View", Tab::View),
                 ] {
-                    if ui.selectable_label(self.tab == tab, label).clicked() {
-                        self.tab = tab;
+                    let response = ui.selectable_label(self.tab == tab, label);
+                    if self.tab == tab {
+                        ui.painter().line_segment([response.rect.left_bottom(), response.rect.right_bottom()], Stroke::new(2., theme::ACCENT));
                     }
+                    if response.clicked() { self.tab = tab; }
                 }
                 ui.separator();
                 for (label, action, enabled) in [
@@ -1697,7 +1724,7 @@ impl FolioApp {
                             if ui.add(IconButton::new(icon, label)).clicked() { self.run_tool(tool, ctx); }
                         }
                         ui.menu_button("Export", |ui| {
-                            for (label, icon, tool) in [("Export text…", Icon::ExportText, workbench::Tool::ExportText), ("Export selection…", Icon::ExportSelection, workbench::Tool::ExportSelection)] {
+                            for (label, icon, tool) in [("Export document…", Icon::ExportText, workbench::Tool::ExportDocument), ("Export text…", Icon::ExportText, workbench::Tool::ExportText), ("Export selection…", Icon::ExportSelection, workbench::Tool::ExportSelection)] {
                                 if ui.add_enabled(!matches!(tool, workbench::Tool::ExportSelection) || !self.editor.selection().is_collapsed(), IconButton::new(icon, label)).clicked() { self.run_tool(tool, ctx); ui.close(); }
                             }
                         });
@@ -1706,6 +1733,8 @@ impl FolioApp {
                 }
                 Tab::Home => {
                     ui.horizontal_wrapped(|ui| {
+                        ui.vertical(|ui| {
+                        ui.horizontal(|ui| {
                         ui.menu_button("Clipboard", |ui| {
                         for (label, action, key) in [
                             ("Cut", Action::Cut, "X"),
@@ -1732,7 +1761,6 @@ impl FolioApp {
                             }
                         }
                         });
-                        ui.separator();
                         if self.read_only { ui.disable(); }
                         ui.menu_button("Edit", |ui| {
                         if ui
@@ -1749,7 +1777,14 @@ impl FolioApp {
                         }
                         self.writing_tools_ui(ui);
                         });
+                        });
+                        ui.label(egui::RichText::new("Clipboard").size(10.).color(theme::muted(self.dark_mode)));
+                        });
                         ui.separator();
+                        if self.read_only { ui.disable(); }
+                        egui::Frame::new().fill(theme::font_group(self.dark_mode)).inner_margin(egui::Margin::symmetric(4, 2)).show(ui, |ui| {
+                        ui.vertical(|ui| {
+                        ui.horizontal(|ui| {
                         let style = self.current_style();
                         let mut family = if layout::is_serif_family(&style.font_family) {
                             "serif"
@@ -1800,7 +1835,6 @@ impl FolioApp {
                                 ..Default::default()
                             });
                         }
-                        ui.separator();
 
                         for (label, selected, action) in [
                             ("Bold", style.bold, Action::Bold),
@@ -1823,7 +1857,14 @@ impl FolioApp {
                             }
                         }
                         self.highlight_control(ui, &style);
+                        });
+                        ui.label(egui::RichText::new("Font").size(10.).color(theme::muted(self.dark_mode)));
+                        });
+                        });
                         ui.separator();
+                        egui::Frame::new().fill(theme::paragraph_group(self.dark_mode)).inner_margin(egui::Margin::symmetric(4, 2)).show(ui, |ui| {
+                        ui.vertical(|ui| {
+                        ui.horizontal_wrapped(|ui| {
                         let alignment = self
                             .editor
                             .document()
@@ -1915,6 +1956,10 @@ impl FolioApp {
                             }
                         }
                         self.line_spacing_control(ui, p.line_spacing);
+                        });
+                        });
+                        ui.label(egui::RichText::new("Paragraph").size(10.).color(theme::muted(self.dark_mode)));
+                        });
                         });
                     });
                 }
@@ -3104,6 +3149,135 @@ mod app_tests {
         std::fs::create_dir_all(&dir.0).unwrap();
         files::save(&Document::default(), &path, None).unwrap();
         path
+    }
+    #[test]
+    fn whole_document_exports_preserve_readonly_history_and_atomic_failures() {
+        let dir = RecoveryDirectory::new();
+        std::fs::create_dir_all(&dir.0).unwrap();
+        let mut app = dir.app();
+        app.insert("First paragraph\nSecond paragraph".into());
+        app.editor
+            .set_selection(Selection::new(Position::new(0, 0), Position::new(0, 5)))
+            .unwrap();
+        app.read_only = true;
+        assert!(app.flush_recovery());
+        let before = app.editor.document().clone();
+        let selected = app.editor.selection();
+        let recovery = app
+            .workspace_store
+            .as_ref()
+            .unwrap()
+            .load_recovery()
+            .unwrap();
+        let undo = app.editor.can_undo();
+        for format in export_formats::ALL {
+            let path = dir.0.join(format!("whole.{}", format.extension()));
+            app.export_document_to(path.clone(), format, false).unwrap();
+            let original = std::fs::read(&path).unwrap();
+            assert!(!original.is_empty());
+            assert!(app.export_document_to(path.clone(), format, false).is_err());
+            assert_eq!(std::fs::read(&path).unwrap(), original);
+            app.export_document_to(path, format, true).unwrap();
+            assert!(
+                app.export_document_to(
+                    dir.0
+                        .join("missing")
+                        .join(format!("out.{}", format.extension())),
+                    format,
+                    false
+                )
+                .is_err()
+            );
+            assert_eq!(app.editor.document(), &before);
+            assert_eq!(app.editor.selection(), selected);
+            assert_eq!(app.editor.can_undo(), undo);
+            assert!(app.editor.is_dirty());
+            assert!(app.path.is_none());
+            assert!(app.read_only);
+        }
+        assert_eq!(
+            std::fs::read_to_string(dir.0.join("whole.txt")).unwrap(),
+            "First paragraph\nSecond paragraph"
+        );
+        app.path = Some(dir.0.join("whole.docx"));
+        assert!(
+            app.export_document_to(app.path.clone().unwrap(), ExportFormat::Docx, true)
+                .is_err()
+        );
+        app.protected = Some(dir.0.join("whole.txt"));
+        assert!(
+            app.export_document_to(app.protected.clone().unwrap(), ExportFormat::Text, true)
+                .is_err()
+        );
+        assert!(
+            app.export_document_to(dir.0.join("wrong.txt"), ExportFormat::Pdf, false)
+                .is_err()
+        );
+        assert_eq!(
+            app.workspace_store
+                .as_ref()
+                .unwrap()
+                .load_recovery()
+                .unwrap(),
+            recovery
+        );
+        app.read_only = false;
+        app.execute(Command::Undo);
+        assert!(
+            app.editor
+                .document()
+                .paragraph(0)
+                .unwrap()
+                .text()
+                .is_empty()
+        );
+    }
+    #[test]
+    fn export_picker_reachable_accessible_blocks_edits_and_escape_preserves_state() {
+        let ctx = egui::Context::default();
+        layout::install_fonts(&ctx);
+        theme::install(&ctx);
+        ctx.enable_accesskit();
+        let mut app = FolioApp::default();
+        app.insert("keep draft".into());
+        let before = app.editor.document().clone();
+        let selected = app.editor.selection();
+        app.run_tool(workbench::Tool::ExportDocument, &ctx);
+        assert!(app.workbench_blocks_editing());
+        let output = ctx.run(egui::RawInput::default(), |ctx| app.workbench_windows(ctx));
+        let update = output.platform_output.accesskit_update.unwrap();
+        for label in [
+            "PDF",
+            "Word document",
+            "OpenDocument",
+            "Rich Text",
+            "HTML",
+            "Markdown",
+            "Plain text",
+            "Choose destination…",
+            "Cancel",
+        ] {
+            assert!(
+                update
+                    .nodes
+                    .iter()
+                    .any(|(_, node)| node.label() == Some(label)),
+                "Missing export control {label}"
+            );
+        }
+        app.insert("blocked".into());
+        assert_eq!(app.editor.document(), &before);
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![key(Key::Escape, Default::default())],
+                ..Default::default()
+            },
+            |ctx| app.workbench_windows(ctx),
+        );
+        assert!(!app.workbench_blocks_editing());
+        assert_eq!(app.editor.document(), &before);
+        assert_eq!(app.editor.selection(), selected);
+        assert!(app.editor.is_dirty());
     }
     #[test]
     fn drops_reject_multiple_and_invalid_files_and_follow_unsaved_lifecycle() {
@@ -5212,7 +5386,7 @@ mod app_tests {
                     let height = ctx.available_rect().top();
                     let output = ctx.end_pass();
 
-                    let limit = if width == 1180.0 { 100.0 } else { 136.0 };
+                    let limit = if width == 1180.0 { 112.0 } else { 160.0 };
                     assert!(
                         height <= limit,
                         "{tab:?} at {width}: ribbon height {height} exceeds {limit}"
@@ -5241,6 +5415,7 @@ mod app_tests {
             (Tab::Home, "Edit", "Clear formatting"),
             (Tab::Home, "Paragraph", "Before"),
             (Tab::File, "Export", "Export text…"),
+            (Tab::File, "Export", "Export document…"),
             (
                 Tab::File,
                 "Recent Documents",

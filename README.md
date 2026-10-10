@@ -97,3 +97,9 @@ Read the [contracts](docs/INTERFACES.md), [milestone](docs/MILESTONE-1.md),
 [desktop guide](apps/desktop/README.md), [roadmap](ROADMAP.md) and
 [changelog](CHANGELOG.md). Folio bundles original text branding and licensed
 Noto fonts, with no Microsoft logos, templates or assets. [MIT license](LICENSE).
+
+Export a copy through **File → Export → Export document…**: PDF, DOCX, ODT,
+RTF, HTML, Markdown or plain text. The format picker explains styling fidelity;
+existing selection text export remains available. Exports leave your active
+file, unsaved edits and undo history intact. The same full-document export is
+available through `folio_export_document`, one of 20 local MCP tools.

@@ -115,6 +115,7 @@ pub enum Tool {
     Palette,
     Templates,
     Duplicate,
+    ExportDocument,
     ExportText,
     ExportSelection,
     ReadOnly,
@@ -177,6 +178,7 @@ pub fn commands() -> Vec<NamedCommand> {
     for (label, tool) in [
         ("Template gallery", Templates),
         ("Duplicate document", Duplicate),
+        ("Export document…", ExportDocument),
         ("Export document as text", ExportText),
         ("Export selection as text", ExportSelection),
         ("Toggle read-only mode", ReadOnly),

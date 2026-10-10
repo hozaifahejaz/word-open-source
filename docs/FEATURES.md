@@ -47,7 +47,7 @@ and build; published help scopes are recorded below without invented build numbe
 | Page settings/breaks | Supported | One size/orientation/margin set and explicit breaks; automatic/explicit pagination implemented | Desktop/web; ECMA Part 1 |
 | Local workspace | Supported | File-tab Recent Documents (12 unique paths), unavailable-entry removal, per-document caret, remembered light/dark appearance and zoom | [Acceptance evidence](ACCEPTANCE.md) |
 | Auto-save/recovery | Supported | Named unprotected DOCX files auto-save after five idle seconds; dirty recovery checkpoints after two seconds; explicit startup Restore/Discard retains import guards | [Acceptance evidence](ACCEPTANCE.md) |
-| Advanced workspace | Partial | Original template gallery, distinct DOCX copies, UTF-8 text export, single-DOCX drag/drop and read-only editing mode; tabs/windows, rename, password protection, version history and comparison deferred | Approved feature roadmap |
+| Advanced workspace | Partial | Original template gallery, distinct DOCX copies, seven-format full-document export and selection text export, single-DOCX drag/drop and read-only editing mode; tabs/windows, rename, password protection, version history and comparison deferred | Approved feature roadmap |
 | DOCX | Partial | Supported semantic subset import/export; inherited styles flattened; omissions/approximations warn | ECMA Parts 1–4; MS-DOCX |
 | Tables/images | Deferred | No model/rendering; imports must warn | Create document; ECMA Part 1 |
 | Styles/templates | Partial | Inherited named styles resolved on import and flattened; original Blank/Letter/Meeting Notes/Project Brief document templates; named-style editor and Word template codecs deferred | Web service; WordprocessingML |
@@ -59,9 +59,9 @@ and build; published help scopes are recorded below without invented build numbe
 | Collaboration | Deferred | Local editing only; no coauthoring/version history/sync | Create document; Web service |
 | Proofing | Deferred | No spelling/grammar, dictionary, translation or thesaurus | Design/edit; Desktop/web |
 | Mail merge | Deferred | No data sources, merge fields, envelopes/labels | Desktop/web; ECMA Part 1 |
-| Printing/PDF | Deferred | No print pipeline or PDF export | Desktop/web |
+| Printing/PDF | Partial | PDF copy export follows document pagination and supported text styling; native printing deferred | Desktop |
 | Accessibility | Partial | eframe backend enabled; custom editing semantics/screen-reader checks/audit pending | Desktop/web |
-| Automation/add-ins | Partial | 19 MCP tools for live/background documents; no VBA/macros/Office add-ins execution | [MCP setup](MCP.md); Desktop/web |
+| Automation/add-ins | Partial | 20 MCP tools for live/background documents; no VBA/macros/Office add-ins execution | [MCP setup](MCP.md); Desktop/web |
 | Legacy/other formats | Deferred | No .doc, .docm, .dot/.dotx, RTF or ODT codec | MS-DOC; ECMA |
 | Cloud/AI | Deferred | No OneDrive/accounts, online services, dictation or AI assistant | Create document; Mobile Copilot |
 | Browser/mobile | Deferred | Windows/macOS/Linux native first; web/iOS/Android front ends later | Web service; Mobile Copilot |
@@ -194,7 +194,7 @@ mode. This is an editing mode, with no encryption or filesystem permission claim
 
 ## MCP editing parity
 
-The 19 local MCP tools include Unicode case and whole-word search controls,
+The 20 local MCP tools include Unicode case and whole-word search controls,
 structure-preserving case conversion, full text and paragraph formatting, complete
 page-layout read/edit, template discovery/new documents, distinct DOCX copies and
 UTF-8 text export. RGB highlight omission preserves it and explicit null clears it;
@@ -202,3 +202,21 @@ nested input fields are strict. Read-only and interaction dialogs protect mutati
 routes, with navigation/read/export available in read-only mode. Background SDK
 smoke uses disposable temporary DOCX/TXT files and verifies saved formatting on
 reopen; the live smoke only inserts, finds and undoes text in a blank test window.
+
+### Export formats and compact ribbon
+
+File → Export → Export document… and Commands open a seven-format picker:
+PDF, Word DOCX, OpenDocument ODT, RTF, HTML, Markdown and plain UTF-8 text. The
+picker describes fidelity before opening the native destination chooser. Every
+format exports the whole document; the existing Export selection… remains TXT.
+Extension mismatches, source aliases and unconfirmed overwrites are rejected.
+PDF is a fixed-page copy; unsupported font/glyph coverage fails visibly rather
+than dropping text. HTML carries print page settings with browser-dependent
+pagination. Markdown and text intentionally simplify styling and page geometry.
+All exports preserve selection, history, path, dirty state and recovery.
+
+The Home ribbon keeps Clipboard, Font and Paragraph in compact labeled groups.
+Lavender and teal section tones, colored action icons and a blue active-tab line
+remain legible in light/dark themes. File/Home/Layout/View retain their existing
+supported actions and accessible focus labels. Group wrapping keeps controls
+inside smaller windows.

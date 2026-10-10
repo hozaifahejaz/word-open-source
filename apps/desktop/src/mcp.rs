@@ -90,6 +90,15 @@ pub fn tools() -> Vec<Value> {
             false,
         ),
         (
+            "folio_export_document",
+            "Export the entire document as PDF, DOCX, ODT, RTF, HTML, Markdown or UTF-8 text to a distinct absolute path. Preserves editor state; existing destinations require overwrite=true. PDF preserves pagination; editable formats preserve supported structure; Markdown/text simplify styling.",
+            object(
+                json!({"path":string,"format":{"type":"string","enum":["pdf","docx","odt","rtf","html","markdown","txt"]},"overwrite":{"type":"boolean","default":false}}),
+                &["path", "format"],
+            ),
+            false,
+        ),
+        (
             "folio_export_text",
             "Export the document or optional selection to a distinct absolute UTF-8 .txt path without changing editor state. Paragraphs use newlines; page breaks use form feeds. Existing destinations require overwrite=true.",
             object(
@@ -430,6 +439,39 @@ struct ExportInput {
     #[serde(default)]
     overwrite: bool,
 }
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum DocumentFormat {
+    Pdf,
+    Docx,
+    Odt,
+    Rtf,
+    Html,
+    Markdown,
+    Txt,
+}
+impl DocumentFormat {
+    fn format(self) -> crate::ExportFormat {
+        use crate::ExportFormat as F;
+        match self {
+            Self::Pdf => F::Pdf,
+            Self::Docx => F::Docx,
+            Self::Odt => F::Odt,
+            Self::Rtf => F::Rtf,
+            Self::Html => F::Html,
+            Self::Markdown => F::Markdown,
+            Self::Txt => F::Text,
+        }
+    }
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExportDocumentInput {
+    path: PathBuf,
+    format: DocumentFormat,
+    #[serde(default)]
+    overwrite: bool,
+}
 fn paragraph_style(s: &ParagraphStyle) -> Value {
     let (kind, value) = match s.line_spacing {
         LineSpacing::Multiple(v) => ("multiple", u32::from(v)),
@@ -477,7 +519,8 @@ fn check_unsaved(app: &FolioApp, discard: bool) -> Result<(), String> {
 }
 
 pub fn call(app: &mut FolioApp, name: &str, arguments: Value) -> Result<Value, String> {
-    if app.pending_recovery.is_some()
+    if app.export_picker.is_some()
+        || app.pending_recovery.is_some()
         || app.pending.is_some()
         || app.overwrite.is_some()
         || app.error.is_some()
@@ -524,6 +567,13 @@ pub fn call(app: &mut FolioApp, name: &str, arguments: Value) -> Result<Value, S
             check_destination_path(&a.path, "docx")?;
             app.duplicate_to(a.path.clone(), a.overwrite)?;
             return Ok(json!({"duplicated":true,"path":a.path}));
+        }
+        "folio_export_document" => {
+            let a: ExportDocumentInput = args(arguments)?;
+            let format = a.format.format();
+            check_destination_path(&a.path, format.extension())?;
+            app.export_document_to(a.path.clone(), format, a.overwrite)?;
+            return Ok(json!({"exported":true,"path":a.path,"format":format.extension()}));
         }
         "folio_export_text" => {
             let a: ExportInput = args(arguments)?;
@@ -1037,8 +1087,34 @@ mod tests {
         json!({"anchor":{"block":0,"offset":a},"focus":{"block":0,"offset":b}})
     }
     #[test]
+    fn document_export_strict_arguments_and_modal_guards_preserve_state() {
+        let mut app = FolioApp::default();
+        app.insert("draft".into());
+        let before = document(&app);
+        for input in [
+            json!({"path":"relative.pdf", "format":"pdf"}),
+            json!({"path":"/tmp/file.pdf", "format":"unknown"}),
+            json!({"path":"/tmp/file.pdf", "format":"pdf", "selection":selection(0,1)}),
+            json!({"path":"/tmp/file.pdf", "format":"pdf", "overwrite":null}),
+        ] {
+            assert!(call(&mut app, "folio_export_document", input).is_err());
+            assert_eq!(document(&app), before);
+        }
+        app.export_picker = Some(crate::ExportFormat::Pdf);
+        assert!(call(&mut app, "folio_get_document", json!({})).is_err());
+        assert!(
+            call(
+                &mut app,
+                "folio_export_document",
+                json!({"path":"/tmp/file.pdf", "format":"pdf"})
+            )
+            .is_err()
+        );
+        assert_eq!(document(&app), before);
+    }
+    #[test]
     fn parity_schema_styles_options_case_and_layout() {
-        assert_eq!(tools().len(), 19);
+        assert_eq!(tools().len(), 20);
         let mut app = FolioApp::default();
         call(
             &mut app,
@@ -1582,7 +1658,7 @@ mod tests {
         assert_eq!(replies.len(), 5);
         assert_eq!(replies[0]["error"]["code"], -32000);
         assert_eq!(replies[1]["result"]["protocolVersion"], "2025-11-25");
-        assert_eq!(replies[2]["result"]["tools"].as_array().unwrap().len(), 19);
+        assert_eq!(replies[2]["result"]["tools"].as_array().unwrap().len(), 20);
         assert_eq!(replies[3]["result"]["structuredContent"]["dirty"], false);
         assert_eq!(replies[4]["error"]["code"], -32602);
     }

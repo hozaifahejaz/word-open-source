@@ -375,3 +375,27 @@ these egui/CLI results do not establish Windows/Linux native UI or screen-reader
 speech behavior. Session timing uses monotonic wall time and is intentionally
 session-only. Reading/speaking estimates use 200/130 whitespace words per minute;
 snippets/goals are local workspace preferences with no network synchronization.
+
+### Lifecycle, template and read-only checks
+
+- From File or Commands, select each template. Blank is clean; the other three
+  have formatted titles and useful editable prompts and start unsaved. Edit first,
+  select another, then Cancel: current content and recovery remain. Repeat using
+  Discard with a missing Open target: original content/recovery remain.
+- Duplicate and export whole/selected text to temporary destinations. Reject an
+  existing destination, then explicitly replace it. Confirm editor selection,
+  source path, dirty status and Undo remain unchanged. Test reversed selections
+  across paragraph/page breaks and a grapheme such as `é`; `.txt` uses newlines
+  and form feeds. Active-source hard links/aliases must be rejected.
+- Drop one DOCX while dirty: Save/Discard/Cancel appears. Drop multiple DOCX or a
+  PDF: a visible error appears, and no document opens.
+- Toggle View → Read-only. Typing, IME commit, paste, formatting, undo/redo and
+  Layout controls must not change text or page layout. Select, arrow navigation,
+  Copy, Find, New/Open, duplicate/export and distinct Save As remain usable.
+  The status badge and canvas accessibility node identify Read-only. Preexisting
+  dirty content checkpoints recovery but does not auto-save to the source.
+
+Automated lifecycle regressions use only temporary files and verify model/history
+preservation, aliases/overwrite/failure guards, drop dispatch, recovery and
+read-only accessibility state. Native OS drag-and-drop and screen-reader speech
+remain manual release checks.

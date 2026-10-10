@@ -167,3 +167,27 @@ unsupported patterns/theme colors warn. Workspace/recovery writes schema 2 and
 reads schema 1 with default new properties, preserving unsupported schema 3+
 files against save. See [codec boundaries](../crates/docx/README.md) and
 [acceptance evidence](ACCEPTANCE.md).
+### Document lifecycle and exports
+
+File and Commands offer an original template gallery: Blank, Letter, Meeting
+notes and Project brief. Templates use supported paragraphs and formatted runs.
+Nonblank templates start unsaved. Switching uses the same Save/Discard/Cancel
+prompt as New; cancelled or failed switches preserve current content and recovery.
+Drop a single DOCX onto the window to use that open flow. Multiple files and other
+formats show an error without changing the document.
+
+Duplicate writes a complete supported DOCX to a distinct file. Export text writes
+UTF-8 `.txt`, for the whole document or the current selection. Paragraph boundaries
+are newlines; explicit page breaks are form feeds on their own lines. Reversed
+selections and Unicode grapheme boundaries use the document's validated selection.
+Copy/export requires an explicit replacement decision for existing destinations,
+rejects active-source aliases (including hard links), and uses atomic replacement.
+It preserves the active file, dirty state, selection, history and import protections.
+
+View → Read-only mode (also Commands) disables document mutations, formatting,
+paste, undo/redo and page layout, while allowing selection, navigation, copying,
+New/Open and exports. A Read-only badge and accessible canvas label identify the
+mode. Auto-save pauses; recovery still checkpoints preexisting unsaved edits.
+Save/Save changes uses Save As; a distinct destination is allowed and overwriting
+the active source or an alias is blocked. Successful New/Open/template resets the
+mode. This is an editing mode, with no encryption or filesystem permission claim.

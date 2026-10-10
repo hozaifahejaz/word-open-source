@@ -9,12 +9,33 @@ use egui::Key;
 use std::time::Instant;
 impl FolioApp {
     pub fn workbench_blocks_editing(&self) -> bool {
-        self.workbench.palette
+        self.template_gallery
+            || self.workbench.palette
             || self.workbench.navigation.is_some()
             || self.workbench.snippets
             || self.workbench.shortcuts
     }
     fn tool_enabled(&self, tool: Tool) -> bool {
+        if self.read_only && matches!(tool, Tool::Action(a) if a.mutates_document()) {
+            return false;
+        }
+        if self.read_only
+            && matches!(
+                tool,
+                Tool::DateTime
+                    | Tool::PaintFormat
+                    | Tool::ClearParagraph
+                    | Tool::Case(_)
+                    | Tool::Highlight
+                    | Tool::Align(_)
+                    | Tool::Symbol(_)
+            )
+        {
+            return false;
+        }
+        if matches!(tool, Tool::ExportSelection) {
+            return !self.editor.selection().is_collapsed();
+        }
         match tool {
             Tool::Action(editing::Action::Undo) => self.editor.can_undo(),
             Tool::Action(editing::Action::Redo) => self.editor.can_redo(),
@@ -44,6 +65,19 @@ impl FolioApp {
         self.focus_canvas = true;
         match tool {
             Tool::Action(action) => self.action(action, ctx),
+            Tool::Templates => {
+                self.template_gallery = true;
+                self.focus_canvas = false;
+                self.composition = None;
+                self.ime_enabled = false;
+            }
+            Tool::Duplicate => self.choose_export(crate::WriteOperation::Duplicate, ctx),
+            Tool::ExportText => self.choose_export(crate::WriteOperation::Text(None), ctx),
+            Tool::ExportSelection => self.choose_export(
+                crate::WriteOperation::Text(Some(self.editor.selection())),
+                ctx,
+            ),
+            Tool::ReadOnly => self.toggle_read_only(),
             Tool::Palette => self.open_palette(),
             Tool::Navigate(kind) => {
                 self.workbench.navigation = Some(kind);
@@ -261,6 +295,7 @@ impl FolioApp {
         if self.workbench_blocks_editing()
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape))
         {
+            self.template_gallery = false;
             self.workbench.palette = false;
             self.workbench.navigation = None;
             self.workbench.snippets = false;
@@ -452,7 +487,10 @@ impl FolioApp {
                                 "Insert a block at the selection. Saved locally on this computer.",
                             );
                             for &(title, text) in BUILT_INS {
-                                if ui.button(title).clicked() {
+                                if ui
+                                    .add_enabled(!self.read_only, egui::Button::new(title))
+                                    .clicked()
+                                {
                                     insert = Some(text.to_owned());
                                 }
                             }
@@ -461,10 +499,13 @@ impl FolioApp {
                             {
                                 ui.horizontal(|ui| {
                                     if ui
-                                        .add_sized(
-                                            [ui.available_width() - 40., 36.],
-                                            egui::Button::new(&snippet.title).wrap(),
-                                        )
+                                        .add_enabled_ui(!self.read_only, |ui| {
+                                            ui.add_sized(
+                                                [ui.available_width() - 40., 36.],
+                                                egui::Button::new(&snippet.title).wrap(),
+                                            )
+                                        })
+                                        .inner
                                         .clicked()
                                     {
                                         insert = Some(snippet.text.clone());

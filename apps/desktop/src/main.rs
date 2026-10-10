@@ -3,6 +3,7 @@ mod files;
 mod icons;
 mod layout;
 mod mcp;
+mod templates;
 mod theme;
 mod workbench;
 mod workbench_ui;
@@ -28,11 +29,21 @@ enum Tab {
 #[derive(Clone, Copy)]
 enum Pending {
     New,
+    Template(templates::TemplateId),
     Open,
     Quit,
 }
+#[derive(Clone, Copy)]
+enum WriteOperation {
+    Save,
+    Duplicate,
+    Text(Option<Selection>),
+}
 struct FolioApp {
     workbench: workbench::Workbench,
+    read_only: bool,
+    template_gallery: bool,
+    write_operation: WriteOperation,
     editor: Editor,
     path: Option<PathBuf>,
     protected: Option<PathBuf>,
@@ -83,6 +94,9 @@ impl Default for FolioApp {
     fn default() -> Self {
         Self {
             workbench: workbench::Workbench::default(),
+            read_only: false,
+            template_gallery: false,
+            write_operation: WriteOperation::Save,
             editor: Editor::default(),
             path: None,
             protected: None,
@@ -379,6 +393,50 @@ impl FolioApp {
         self.autosave_checkpoint.clear();
         self.observed_document = self.editor.document().clone();
     }
+    pub fn is_mutation_blocked(&self) -> bool {
+        self.read_only
+            || self.workbench_blocks_editing()
+            || self.pending_recovery.is_some()
+            || self.pending.is_some()
+            || self.overwrite.is_some()
+            || self.error.is_some()
+    }
+    fn toggle_read_only(&mut self) {
+        self.read_only = !self.read_only;
+        self.composition = None;
+        self.ime_enabled = false;
+        self.typing = None;
+        self.focus_canvas = true;
+    }
+    fn template_document(&mut self, id: templates::TemplateId) -> Result<(), String> {
+        self.ensure_recovery_resolved()?;
+        let doc = templates::build(id)?;
+        let mut editor = Editor::new(doc.clone()).map_err(|e| e.to_string())?;
+        if id != templates::TemplateId::Blank {
+            editor
+                .load_recovered_document(doc, Selection::default())
+                .map_err(|e| e.to_string())?;
+        }
+        if !self.clear_recovery() {
+            return Err(self.error.clone().unwrap());
+        }
+        self.capture_caret();
+        self.editor = editor;
+        self.path = None;
+        self.protected = None;
+        self.warnings.clear();
+        self.typing = None;
+        self.composition = None;
+        self.ime_enabled = false;
+        self.read_only = false;
+        self.notice.clear();
+        self.focus_canvas = true;
+        self.observed_document = self.editor.document().clone();
+        if self.editor.is_dirty() {
+            self.recovery_checkpoint.mark_changed(Instant::now());
+        }
+        Ok(())
+    }
     fn new_document(&mut self) -> Result<(), String> {
         self.ensure_recovery_resolved()?;
         if !self.clear_recovery() {
@@ -386,6 +444,7 @@ impl FolioApp {
         }
         self.capture_caret();
         self.editor = Editor::default();
+        self.read_only = false;
         self.path = None;
         self.protected = None;
         self.warnings.clear();
@@ -508,6 +567,7 @@ impl FolioApp {
         }
         self.capture_caret();
         self.editor = editor;
+        self.read_only = false;
         self.protected = (!report.warnings.is_empty()).then(|| path.to_path_buf());
         self.path = Some(path.to_path_buf());
         self.warnings = report.warnings;
@@ -522,6 +582,14 @@ impl FolioApp {
     }
     fn save_document(&mut self, path: PathBuf) -> Result<(), String> {
         self.ensure_recovery_resolved()?;
+        if self.read_only
+            && self
+                .path
+                .as_deref()
+                .is_some_and(|p| files::same_file(p, &path))
+        {
+            return Err("Read-only mode: use Save As to a different file".into());
+        }
         let stored = StoredPath::from_path(&path).map_err(|error| error.to_string())?;
         files::save(self.editor.document(), &path, self.protected.as_deref())?;
         self.capture_caret();
@@ -541,6 +609,102 @@ impl FolioApp {
         }
         Ok(())
     }
+    pub fn duplicate_to(&mut self, path: PathBuf, overwrite: bool) -> Result<(), String> {
+        self.ensure_recovery_resolved()?;
+        files::check_destination(&path, "docx", self.path.as_deref(), overwrite)?;
+        files::save(self.editor.document(), &path, self.protected.as_deref())
+    }
+    pub fn export_text_to(
+        &mut self,
+        path: PathBuf,
+        selection: Option<Selection>,
+        overwrite: bool,
+    ) -> Result<(), String> {
+        self.ensure_recovery_resolved()?;
+        if self
+            .protected
+            .as_deref()
+            .is_some_and(|p| files::same_file(p, &path))
+        {
+            return Err("The warned import source is protected".into());
+        }
+        files::export_text(
+            self.editor.document(),
+            &path,
+            selection,
+            self.path.as_deref(),
+            overwrite,
+        )
+    }
+    fn finish_write(&mut self, path: PathBuf, overwrite: bool, ctx: &egui::Context) {
+        let result = match self.write_operation {
+            WriteOperation::Save => {
+                self.save_to(path, ctx);
+                return;
+            }
+            WriteOperation::Duplicate => self.duplicate_to(path, overwrite),
+            WriteOperation::Text(selection) => self.export_text_to(path, selection, overwrite),
+        };
+        match result {
+            Ok(()) => {
+                self.notice = "Copy exported".into();
+                self.focus_canvas = true;
+            }
+            Err(e) => self.error = Some(e),
+        }
+    }
+    fn choose_export(&mut self, operation: WriteOperation, ctx: &egui::Context) {
+        self.write_operation = operation;
+        let extension = if matches!(operation, WriteOperation::Duplicate) {
+            "docx"
+        } else {
+            "txt"
+        };
+        let Some(mut path) = rfd::FileDialog::new()
+            .add_filter(extension, &[extension])
+            .set_file_name(format!("Untitled-copy.{extension}"))
+            .save_file()
+        else {
+            return;
+        };
+        if path.extension().is_none() {
+            path.set_extension(extension);
+        }
+        if let Err(error) = files::check_destination(&path, extension, self.path.as_deref(), true) {
+            self.error = Some(error);
+            return;
+        }
+        if path.exists() {
+            self.overwrite = Some(path);
+        } else {
+            self.finish_write(path, false, ctx);
+        }
+    }
+    fn dispatch_drops(&mut self, paths: &[Option<PathBuf>], ctx: &egui::Context) {
+        if paths.is_empty() {
+            return;
+        }
+        if paths.len() != 1
+            || !paths[0].as_deref().is_some_and(|p| {
+                p.extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("docx"))
+            })
+        {
+            self.error = Some(
+                "Drop a single DOCX file. Multiple files and other formats are unsupported.".into(),
+            );
+            return;
+        }
+        if self.pending.is_some()
+            || self.overwrite.is_some()
+            || self.error.is_some()
+            || self.workbench_blocks_editing()
+        {
+            self.error = Some("Finish the current dialog before dropping a document".into());
+            return;
+        }
+        self.request_open_path(paths[0].clone().unwrap(), ctx);
+    }
     fn process_checkpoints(&mut self, now: Instant, ctx: &egui::Context) {
         if self.allow_close {
             return;
@@ -555,7 +719,10 @@ impl FolioApp {
             self.flush_recovery();
             ctx.request_repaint();
         }
-        let eligible = self.editor.is_dirty() && self.path.is_some() && self.protected.is_none();
+        let eligible = !self.read_only
+            && self.editor.is_dirty()
+            && self.path.is_some()
+            && self.protected.is_none();
         if self.autosave_checkpoint.is_due(now, Duration::from_secs(5))
             && self.pending.is_none()
             && self.overwrite.is_none()
@@ -652,6 +819,9 @@ impl FolioApp {
         self.show_ai_connection = open;
     }
     fn execute(&mut self, command: Command) {
+        if self.read_only || self.workbench_blocks_editing() {
+            return;
+        }
         self.visual_line = None;
         match self.editor.execute(command) {
             Ok(outcome) => {
@@ -738,6 +908,9 @@ impl FolioApp {
             .unwrap_or_else(|| editing::style_at(&self.editor))
     }
     fn format(&mut self, patch: StylePatch) {
+        if self.read_only || self.workbench_blocks_editing() {
+            return;
+        }
         if self.editor.selection().is_collapsed() {
             let mut s = self.current_style();
             patch.apply(&mut s);
@@ -897,7 +1070,7 @@ impl FolioApp {
         self.show_document_info = !self.show_document_info;
     }
     fn discard_pending(&mut self, pending: Pending, ctx: &egui::Context) {
-        if !self.clear_recovery() {
+        if matches!(pending, Pending::Quit) && !self.clear_recovery() {
             return;
         }
         self.pending = None;
@@ -932,6 +1105,11 @@ impl FolioApp {
                     self.error = Some(error);
                 }
             }
+            Pending::Template(id) => {
+                if let Err(error) = self.template_document(id) {
+                    self.error = Some(error);
+                }
+            }
             Pending::Open => {
                 let path = self.open_target.take().or_else(|| {
                     rfd::FileDialog::new()
@@ -958,7 +1136,9 @@ impl FolioApp {
     }
     // Returns true only after a fully successful save, never for a cancelled dialog.
     fn save(&mut self, save_as: bool, ctx: &egui::Context) -> bool {
-        let choose = save_as
+        self.write_operation = WriteOperation::Save;
+        let choose = self.read_only
+            || save_as
             || self.path.is_none()
             || self
                 .protected
@@ -972,7 +1152,9 @@ impl FolioApp {
                     dialog = dialog.set_directory(parent);
                 }
                 let name = path.file_stem().unwrap_or_default().to_string_lossy();
-                dialog = dialog.set_file_name(if self.protected.is_some() {
+                dialog = dialog.set_file_name(if self.read_only {
+                    format!("{name}-copy.docx")
+                } else if self.protected.is_some() {
                     format!("{name}-converted.docx")
                 } else {
                     format!("{name}.docx")
@@ -1005,6 +1187,15 @@ impl FolioApp {
             self.error=Some("Choose a different file for this warned import. The original source is protected, including aliases.".into());
             return false;
         }
+        if self.read_only
+            && self
+                .path
+                .as_deref()
+                .is_some_and(|p| files::same_file(p, &path))
+        {
+            self.error = Some("Read-only mode: choose a distinct file".into());
+            return false;
+        }
         if choose && path.exists() {
             self.overwrite = Some(path);
             return false;
@@ -1026,6 +1217,9 @@ impl FolioApp {
         }
     }
     fn action(&mut self, action: Action, ctx: &egui::Context) {
+        if self.read_only && action.mutates_document() {
+            return;
+        }
         match action {
             Action::New => self.request(Pending::New, ctx),
             Action::Open => self.request(Pending::Open, ctx),
@@ -1438,7 +1632,7 @@ impl FolioApp {
                         _ => "",
                     };
                     if ui
-                        .add_enabled(enabled, button)
+                        .add_enabled(enabled && !(self.read_only && action.mutates_document()), button)
                         .on_hover_text(format!("{label} ({command}{key})"))
                         .clicked()
                     {
@@ -1453,6 +1647,7 @@ impl FolioApp {
                     .map(|s| s.to_string_lossy().to_string())
                     .unwrap_or("Untitled".into());
                 ui.add(egui::Label::new(egui::RichText::new(name).strong()).truncate());
+                if self.read_only { ui.colored_label(theme::muted(self.dark_mode), "Read-only"); }
                 if self.editor.is_dirty() {
                     ui.colored_label(theme::muted(self.dark_mode), "• Unsaved");
                 }
@@ -1488,6 +1683,11 @@ impl FolioApp {
                             }
                         }
                     });
+                    ui.horizontal_wrapped(|ui| {
+                        for (label, tool) in [("Templates…", workbench::Tool::Templates), ("Duplicate…", workbench::Tool::Duplicate), ("Export text…", workbench::Tool::ExportText), ("Export selection…", workbench::Tool::ExportSelection)] {
+                            if ui.add_enabled(!matches!(tool, workbench::Tool::ExportSelection) || !self.editor.selection().is_collapsed(), IconButton::new(Icon::Copy, label)).clicked() { self.run_tool(tool, ctx); }
+                        }
+                    });
                     ui.label("DOCX • A warned import always saves as a converted copy.");
                     self.recent_documents_ui(ui, ctx);
                 }
@@ -1499,7 +1699,7 @@ impl FolioApp {
                             ("Paste", Action::Paste, "V"),
                         ] {
                             let enabled =
-                                action == Action::Paste || !self.editor.selection().is_collapsed();
+                                (action == Action::Paste || !self.editor.selection().is_collapsed()) && !(self.read_only && action.mutates_document());
                             let command = if cfg!(target_os = "macos") {
                                 "⌘"
                             } else {
@@ -1517,6 +1717,7 @@ impl FolioApp {
                             }
                         }
                         ui.separator();
+                        if self.read_only { ui.disable(); }
                         if ui
                             .add(
                                 IconButton::new(Icon::ClearFormatting, "Clear formatting")
@@ -1656,6 +1857,7 @@ impl FolioApp {
                         }
                     });
                     ui.horizontal_wrapped(|ui| {
+                        if self.read_only { ui.disable(); }
                         let p = self
                             .editor
                             .document()
@@ -1697,6 +1899,7 @@ impl FolioApp {
                 }
                 Tab::Layout => {
                     ui.horizontal_wrapped(|ui| {
+                        if self.read_only { ui.disable(); }
                         let mut page = self.editor.document().page_layout.clone();
                         let old = page.clone();
                         ui.label("Paper");
@@ -1758,6 +1961,7 @@ impl FolioApp {
                     });
                 }
                 Tab::View => {
+                    if ui.add(IconButton::new(Icon::ReadOnly, "Read-only mode").selected(self.read_only)).on_hover_text("Editing mode; navigation, copying and exports remain available").clicked() { self.toggle_read_only(); }
                     ui.horizontal(|ui| {
                         ui.label("Zoom");
                         ui.add(
@@ -1854,15 +2058,16 @@ impl FolioApp {
                         self.find_next();
                     }
                     if ui
-                        .add_enabled(!self.needle.is_empty(), egui::Button::new("Replace"))
+                        .add_enabled(!self.read_only && !self.needle.is_empty(), egui::Button::new("Replace"))
                         .clicked()
                     {
                         self.replace_current_match();
                     }
                     if ui
-                        .add_enabled(!self.needle.is_empty(), egui::Button::new("Replace all"))
+                        .add_enabled(!self.read_only && !self.needle.is_empty(), egui::Button::new("Replace all"))
                         .clicked()
                     {
+                        if self.is_mutation_blocked() { return; }
                         match self.editor.execute(Command::ReplaceAllWithOptions {
                             needle: self.needle.clone(),
                             replacement: self.replacement.clone(),
@@ -2192,7 +2397,7 @@ impl FolioApp {
                     );
                     handled = true;
                 }
-                egui::Event::Ime(ime) if focused => {
+                egui::Event::Ime(ime) if focused && !self.read_only => {
                     match ime {
                         egui::ImeEvent::Enabled => {
                             self.ime_enabled = true;
@@ -2296,8 +2501,20 @@ impl FolioApp {
                                 &value,
                                 "Document canvas",
                             );
-                            info.label = Some("Editable paginated document".into());
+                            info.label = Some(
+                                if self.read_only {
+                                    "Read-only paginated document"
+                                } else {
+                                    "Editable paginated document"
+                                }
+                                .into(),
+                            );
                             info
+                        });
+                        ctx.accesskit_node_builder(response.id, |node| {
+                            if self.read_only {
+                                node.set_read_only();
+                            }
                         });
                         if self.focus_canvas && ui.is_enabled() {
                             response.request_focus();
@@ -2431,6 +2648,46 @@ impl FolioApp {
             });
     }
     fn dialogs(&mut self, ctx: &egui::Context) {
+        if self.template_gallery
+            && self.pending.is_none()
+            && self.error.is_none()
+            && self.pending_recovery.is_none()
+        {
+            let mut open = true;
+            let mut selected = None;
+            let mut cancel = false;
+            egui::Window::new("Start with a template")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.set_max_width(420.0);
+                    for &(id, _, title, description) in templates::CATALOG {
+                        ui.group(|ui| {
+                            if ui.add(IconButton::new(Icon::Templates, title)).clicked() {
+                                selected = Some(id);
+                            }
+                            ui.label(
+                                egui::RichText::new(description)
+                                    .small()
+                                    .color(theme::muted(self.dark_mode)),
+                            );
+                        });
+                        ui.add_space(6.0);
+                    }
+                    if ui.button("Cancel template selection").clicked() {
+                        cancel = true;
+                    }
+                });
+            if let Some(id) = selected {
+                self.template_gallery = false;
+                self.request(Pending::Template(id), ctx);
+            } else if !open || cancel {
+                self.template_gallery = false;
+                self.focus_canvas = true;
+            }
+        }
         if let Some(snapshot) = self
             .pending_recovery
             .as_ref()
@@ -2510,7 +2767,7 @@ impl FolioApp {
                     ui.horizontal(|ui| {
                         if ui.button("Replace file").clicked() {
                             self.overwrite = None;
-                            self.save_to(path, ctx);
+                            self.finish_write(path, true, ctx);
                         }
                         if ui.button("Cancel replacement").clicked() {
                             self.overwrite = None;
@@ -2621,6 +2878,14 @@ fn word_edge(doc: &Document, at: Position, forward: bool) -> Position {
 }
 impl eframe::App for FolioApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let drops = ctx.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .map(|f| f.path.clone())
+                .collect::<Vec<_>>()
+        });
+        self.dispatch_drops(&drops, ctx);
         self.process_ai_requests(ctx);
         if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -2652,6 +2917,7 @@ impl eframe::App for FolioApp {
             panel.show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
                 let total = editing::document_statistics(self.editor.document());
+                if self.read_only { ui.label("Read-only"); }
                 ui.label(format!("Page {} of {}", self.active_page, self.pages));
                 ui.separator();
                 let (icon_rect, _) = ui.allocate_exact_size(Vec2::splat(16.0), egui::Sense::hover());
@@ -2806,6 +3072,153 @@ mod app_tests {
         std::fs::create_dir_all(&dir.0).unwrap();
         files::save(&Document::default(), &path, None).unwrap();
         path
+    }
+    #[test]
+    fn drops_reject_multiple_and_invalid_files_and_follow_unsaved_lifecycle() {
+        let ctx = egui::Context::default();
+        let dir = RecoveryDirectory::new();
+        let source = lifecycle_file(&dir, "dropped.docx");
+        let mut app = dir.app();
+        app.insert("keep me".into());
+        app.read_only = true;
+        assert!(app.flush_recovery());
+        let recovery = app
+            .workspace_store
+            .as_ref()
+            .unwrap()
+            .load_recovery()
+            .unwrap();
+        let before = app.editor.document().clone();
+        app.dispatch_drops(&[Some(source.clone()), Some(source.clone())], &ctx);
+        assert!(app.error.take().is_some());
+        assert!(app.pending.is_none());
+        app.dispatch_drops(&[Some(dir.0.join("bad.pdf"))], &ctx);
+        assert!(app.error.take().is_some());
+        assert_eq!(app.editor.document(), &before);
+        app.dispatch_drops(&[Some(source.clone())], &ctx);
+        assert!(matches!(app.pending, Some(Pending::Open)));
+        assert_eq!(app.open_target, Some(source));
+        app.open_target = Some(dir.0.join("missing.docx"));
+        app.discard_pending(Pending::Open, &ctx);
+        assert!(app.error.take().is_some());
+        assert!(app.read_only);
+        assert_eq!(app.editor.document(), &before);
+        assert_eq!(
+            app.workspace_store
+                .as_ref()
+                .unwrap()
+                .load_recovery()
+                .unwrap(),
+            recovery
+        );
+    }
+    #[test]
+    fn readonly_suspends_autosave_retains_recovery_allows_saveas_and_ax_selection() {
+        let ctx = egui::Context::default();
+        layout::install_fonts(&ctx);
+        theme::install(&ctx);
+        ctx.enable_accesskit();
+        let dir = RecoveryDirectory::new();
+        let path = lifecycle_file(&dir, "source.docx");
+        let original = std::fs::read(&path).unwrap();
+        let mut app = dir.app();
+        app.open_path(&path).unwrap();
+        app.insert("unsaved".into());
+        app.toggle_read_only();
+        let now = Instant::now();
+        app.recovery_checkpoint.mark_changed(now);
+        app.autosave_checkpoint.mark_changed(now);
+        app.process_checkpoints(now + Duration::from_secs(6), &ctx);
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert!(app.editor.is_dirty());
+        assert!(
+            app.workspace_store
+                .as_ref()
+                .unwrap()
+                .load_recovery()
+                .unwrap()
+                .is_some()
+        );
+        let before = app.editor.document().clone();
+        assert!(mcp::call(&mut app, "folio_undo", serde_json::json!({})).is_err());
+        assert_eq!(app.editor.document(), &before);
+        let _ = frame(&mut app, &ctx, vec![]);
+        let _ = frame(
+            &mut app,
+            &ctx,
+            vec![
+                key(Key::ArrowLeft, Default::default()),
+                egui::Event::Text("blocked".into()),
+                egui::Event::Paste("blocked".into()),
+                egui::Event::Ime(egui::ImeEvent::Commit("blocked".into())),
+            ],
+        );
+        assert_eq!(app.editor.document(), &before);
+        assert!(app.editor.selection().focus.offset < "unsaved".len());
+        let output = ctx.run(egui::RawInput::default(), |ctx| app.canvas(ctx));
+        let update = output.platform_output.accesskit_update.unwrap();
+        assert!(update.nodes.iter().any(|(_, n)| n.is_read_only() && n.label() == Some("Read-only paginated document")));
+        app.action(Action::SelectAll, &ctx);
+        app.action(Action::Copy, &ctx);
+        assert!(!app.editor.selection().is_collapsed());
+        app.save_document(dir.0.join("save-as.docx")).unwrap();
+        assert!(app.read_only);
+        assert!(!app.editor.is_dirty());
+        app.open_path(&path).unwrap();
+        assert!(!app.read_only);
+    }
+    #[test]
+    fn lifecycle_templates_cancellation_readonly_and_exports_preserve_active_state() {
+        let ctx = egui::Context::default();
+        let mut app = FolioApp::default();
+        app.insert("private e\u{301}".into());
+        app.read_only = true;
+        let before = app.editor.document().clone();
+        app.request(Pending::Template(templates::TemplateId::Letter), &ctx);
+        assert!(app.pending.is_some());
+        app.pending = None; // the Cancel callback
+        assert_eq!(app.editor.document(), &before);
+        assert!(app.read_only);
+        app.execute(Command::Undo);
+        app.insert("blocked".into());
+        app.format(StylePatch {
+            bold: Some(true),
+            ..Default::default()
+        });
+        assert_eq!(app.editor.document(), &before);
+        assert!(app.typing.is_none());
+        app.action(Action::SelectAll, &ctx);
+        assert!(!app.editor.selection().is_collapsed());
+        let dir = RecoveryDirectory::new();
+        std::fs::create_dir_all(&dir.0).unwrap();
+        let source = dir.0.join("source.docx");
+        files::save(app.editor.document(), &source, None).unwrap();
+        app.path = Some(source.clone());
+        let alias = dir.0.join("alias.docx");
+        std::fs::hard_link(&source, &alias).unwrap();
+        assert!(app.save_document(alias.clone()).is_err());
+        assert!(app.duplicate_to(alias, true).is_err());
+        let copy = dir.0.join("copy.docx");
+        let selected = app.editor.selection();
+        app.duplicate_to(copy.clone(), false).unwrap();
+        assert!(app.duplicate_to(copy, false).is_err());
+        app.export_text_to(dir.0.join("out.txt"), Some(selected), false)
+            .unwrap();
+        assert_eq!(app.editor.document(), &before);
+        assert_eq!(app.editor.selection(), selected);
+        assert_eq!(app.path, Some(source));
+        assert!(app.editor.is_dirty());
+        app.read_only = false;
+        app.execute(Command::Undo);
+        assert_eq!(app.editor.document(), &Document::default());
+        app.template_document(templates::TemplateId::Letter)
+            .unwrap();
+        assert!(app.editor.is_dirty());
+        assert!(app.recovery_checkpoint.changed_at.is_some());
+        assert!(!app.read_only);
+        assert!(app.path.is_none());
+        app.template_document(templates::TemplateId::Blank).unwrap();
+        assert!(!app.editor.is_dirty());
     }
     #[test]
     fn twelve_recent_entries_scroll_and_keyboard_focus_reaches_every_control_at_minimum_viewport() {

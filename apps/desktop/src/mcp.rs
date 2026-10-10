@@ -398,6 +398,9 @@ pub fn call(app: &mut FolioApp, name: &str, arguments: Value) -> Result<Value, S
         }
         _ => return Err(format!("Unknown tool: {name}")),
     };
+    if app.is_mutation_blocked() {
+        return Err("Document mutation is blocked by read-only mode or an open dialog".into());
+    }
     let outcome = app.editor.execute(command).map_err(|e| e.to_string())?;
     reset_edit_state(app);
     Ok(

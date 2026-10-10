@@ -8,6 +8,8 @@ use egui::{
 #[derive(Clone, Copy)]
 pub enum Icon {
     Commands,
+    ReadOnly,
+    Templates,
     Recent,
     New,
     Open,
@@ -94,6 +96,25 @@ impl Icon {
             painter.circle_stroke(point(x, y), r * rect.width() / 24.0, stroke);
         };
         match self {
+            Self::ReadOnly => {
+                outline(4., 10., 16., 11.);
+                path(&[
+                    (8., 10.),
+                    (8., 6.),
+                    (10., 3.),
+                    (14., 3.),
+                    (16., 6.),
+                    (16., 10.),
+                ]);
+                circle(12., 15., 1.);
+                line((12., 16.), (12., 18.));
+            }
+            Self::Templates => {
+                outline(3., 3., 8., 8.);
+                outline(14., 3., 7., 8.);
+                outline(3., 14., 8., 7.);
+                outline(14., 14., 7., 7.);
+            }
             Self::Commands => {
                 outline(3., 4., 18., 16.);
                 path(&[(7., 8.), (10., 12.), (7., 16.)]);

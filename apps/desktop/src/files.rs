@@ -1,5 +1,5 @@
 //! Caller-owned codec streams and failure-safe filesystem replacement.
-use document_core::{Document, ImportReport};
+use document_core::{Block, Document, ImportReport, Selection};
 use std::{
     fs::{self, File, OpenOptions},
     io::{Cursor, Write},
@@ -52,6 +52,64 @@ pub fn save(doc: &Document, path: &Path, protected: Option<&Path>) -> Result<(),
         ));
     }
     atomic_write(path, bytes.get_ref())
+}
+/// All copy/export adapters share identity and explicit overwrite decisions.
+pub fn check_destination(
+    path: &Path,
+    extension: &str,
+    source: Option<&Path>,
+    overwrite: bool,
+) -> Result<(), String> {
+    if !path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case(extension))
+    {
+        return Err(format!("Choose an explicit .{extension} destination"));
+    }
+    if source.is_some_and(|source| same_file(source, path)) {
+        return Err("Choose a different file; the active source and its aliases cannot be replaced by this operation".into());
+    }
+    if path.exists() && !overwrite {
+        return Err("The destination exists. Confirm replacement first".into());
+    }
+    Ok(())
+}
+pub fn plain_text(doc: &Document, selection: Option<Selection>) -> Result<String, String> {
+    doc.validate().map_err(|e| e.to_string())?;
+    let selection = selection.unwrap_or_else(|| crate::editing::select_all(doc));
+    doc.validate_selection(selection)
+        .map_err(|e| e.to_string())?;
+    let (start, end) = selection.ordered();
+    let mut text = String::new();
+    for i in start.block..=end.block {
+        if i != start.block {
+            text.push('\n');
+        }
+        match &doc.blocks[i] {
+            Block::PageBreak => text.push('\u{000c}'),
+            Block::Paragraph(p) => {
+                let value = p.text();
+                let from = if i == start.block { start.offset } else { 0 };
+                let to = if i == end.block {
+                    end.offset
+                } else {
+                    value.len()
+                };
+                text.push_str(&value[from..to]);
+            }
+        }
+    }
+    Ok(text)
+}
+pub fn export_text(
+    doc: &Document,
+    path: &Path,
+    selection: Option<Selection>,
+    source: Option<&Path>,
+    overwrite: bool,
+) -> Result<(), String> {
+    check_destination(path, "txt", source, overwrite)?;
+    atomic_write(path, plain_text(doc, selection)?.as_bytes())
 }
 static SERIAL: AtomicU64 = AtomicU64::new(0);
 struct Temporary(PathBuf);
@@ -150,6 +208,40 @@ mod tests {
         ));
         fs::create_dir_all(&p).unwrap();
         p
+    }
+    #[test]
+    fn text_export_preserves_breaks_reversed_selection_and_requires_overwrite() {
+        use document_core::{Block, Paragraph, Position, Selection};
+        let doc = Document {
+            blocks: vec![
+                Block::Paragraph(Paragraph::plain("e\u{301} hello")),
+                Block::PageBreak,
+                Block::Paragraph(Paragraph::plain("world")),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            plain_text(&doc, None).unwrap(),
+            "e\u{301} hello\n\u{000c}\nworld"
+        );
+        let selection = Selection::new(Position::new(2, 3), Position::new(0, 3));
+        assert_eq!(
+            plain_text(&doc, Some(selection)).unwrap(),
+            " hello\n\u{000c}\nwor"
+        );
+        assert!(plain_text(&doc, Some(Selection::caret(Position::new(0, 1)))).is_err());
+        let dir = directory();
+        let path = dir.join("out.txt");
+        fs::write(&path, "original").unwrap();
+        assert!(export_text(&doc, &path, None, None, false).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "original");
+        export_text(&doc, &path, None, None, true).unwrap();
+        let alias = dir.join("alias.txt");
+        fs::hard_link(&path, &alias).unwrap();
+        assert!(export_text(&doc, &alias, None, Some(&path), true).is_err());
+        assert!(export_text(&doc, &dir.join("out.docx"), None, None, false).is_err());
+        assert!(export_text(&doc, &dir.join("missing/out.txt"), None, None, false).is_err());
+        fs::remove_dir_all(dir).unwrap();
     }
     #[test]
     fn atomic_replacement_and_warning_alias_guard() {

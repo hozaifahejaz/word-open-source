@@ -113,6 +113,11 @@ impl Session {
 pub enum Tool {
     Action(EditorAction),
     Palette,
+    Templates,
+    Duplicate,
+    ExportText,
+    ExportSelection,
+    ReadOnly,
     Navigate(Navigation),
     Snippets,
     Shortcuts,
@@ -170,6 +175,11 @@ pub fn commands() -> Vec<NamedCommand> {
         });
     }
     for (label, tool) in [
+        ("Template gallery", Templates),
+        ("Duplicate document", Duplicate),
+        ("Export document as text", ExportText),
+        ("Export selection as text", ExportSelection),
+        ("Toggle read-only mode", ReadOnly),
         ("Go to page", Navigate(Navigation::Page)),
         ("Go to visual line", Navigate(Navigation::Line)),
         ("Go to paragraph", Navigate(Navigation::Paragraph)),

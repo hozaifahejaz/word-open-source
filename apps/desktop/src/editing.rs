@@ -26,6 +26,21 @@ pub enum Action {
     Find,
     PageBreak,
 }
+impl Action {
+    pub fn mutates_document(self) -> bool {
+        !matches!(
+            self,
+            Self::New
+                | Self::Open
+                | Self::Save
+                | Self::SaveAs
+                | Self::Quit
+                | Self::Copy
+                | Self::SelectAll
+                | Self::Find
+        )
+    }
+}
 pub fn shortcut(key: Key, m: Modifiers) -> Option<Action> {
     if !m.command || m.alt {
         return None;

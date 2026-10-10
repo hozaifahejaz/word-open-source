@@ -158,3 +158,17 @@ Document info and `folio-desktop --version` show the application version and
 build revision. `scripts/package-macos.sh` embeds the current Git revision;
 ordinary development builds show `development`. Fit page width accounts for
 visible Document info and Writing progress side panels.
+
+File → Templates provides Blank, Letter, Meeting notes and Project brief. Useful
+nonblank templates start unsaved and share New's unsaved-changes prompt. Drop one
+DOCX to open through the same prompt; multiple/unsupported drops show an error.
+File and Commands also offer Duplicate, Export text and Export selection. Copies
+use a distinct explicit `.docx`/`.txt` destination, confirm replacement, and preserve
+the active document's path, selection, history and unsaved state. Plain text is
+UTF-8 with newlines between paragraphs and form feeds for explicit page breaks.
+
+View → Read-only mode pauses editing and auto-save, keeps navigation/Copy/export,
+and continues recovery for existing unsaved edits. Save uses Save As to a distinct
+file; aliases of the active source are blocked. The mode resets on successful
+New/Open/template, and is an editing convenience rather than encryption or a
+filesystem security permission.

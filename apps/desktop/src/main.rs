@@ -19,7 +19,7 @@ use std::{
 };
 use workspace::{CheckpointDebounce, RecoverySnapshot, StoredPath, WorkspaceState, WorkspaceStore};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tab {
     File,
     Home,
@@ -888,7 +888,7 @@ impl FolioApp {
             egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "Change case")
         });
         menu.response.on_hover_text("Change case of selected text");
-        ui.menu_button("Symbols", |ui| {
+        let symbols = ui.menu_button("Symbols", |ui| {
             egui::Grid::new("symbol-picker")
                 .num_columns(2)
                 .show(ui, |ui| {
@@ -911,6 +911,9 @@ impl FolioApp {
                         }
                     }
                 });
+        });
+        symbols.response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "Symbols")
         });
     }
     fn current_style(&self) -> TextStyle {
@@ -1525,7 +1528,6 @@ impl FolioApp {
             });
     }
     fn recent_documents_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        ui.add_space(6.0);
         ui.menu_button("Recent Documents", |ui| {
             ui.set_max_width(360.0);
             if self.workspace_state.recent.is_empty() {
@@ -1598,9 +1600,12 @@ impl FolioApp {
     fn ribbon(&mut self, ctx: &egui::Context) {
         let frame = egui::Frame::new()
             .fill(theme::surface(self.dark_mode))
-            .inner_margin(egui::Margin::symmetric(24, 12));
+            .inner_margin(egui::Margin::symmetric(12, 5));
         let panel = egui::TopBottomPanel::top("ribbon").frame(frame);
         panel.show(ctx, |ui| {
+            ui.spacing_mut().item_spacing = Vec2::new(4.0, 4.0);
+            ui.spacing_mut().button_padding = Vec2::new(6.0, 4.0);
+            ui.spacing_mut().interact_size.y = 28.0;
             if self.workbench_blocks_editing() || self.pending_recovery.is_some() || self.pending.is_some() || self.overwrite.is_some() || self.error.is_some() {
                 ui.disable();
             }
@@ -1608,11 +1613,21 @@ impl FolioApp {
                 ui.label(
                     egui::RichText::new("folio.")
                         .font(egui::FontId::new(
-                            26.0,
+                            20.0,
                             egui::FontFamily::Name("Serif-Regular".into()),
                         ))
                         .color(theme::text(self.dark_mode)),
                 );
+                for (label, tab) in [
+                    ("File", Tab::File),
+                    ("Home", Tab::Home),
+                    ("Layout", Tab::Layout),
+                    ("View", Tab::View),
+                ] {
+                    if ui.selectable_label(self.tab == tab, label).clicked() {
+                        self.tab = tab;
+                    }
+                }
                 ui.separator();
                 for (label, action, enabled) in [
                     ("New", Action::New, true),
@@ -1625,7 +1640,7 @@ impl FolioApp {
                         ui.separator();
                     }
                     let button = if action == Action::Save {
-                        IconButton::new(Icon::Save, label).primary()
+                        IconButton::new(Icon::Save, label).primary().compact()
                     } else {
                         IconButton::new(Icon::for_action(action), label).compact()
                     };
@@ -1657,23 +1672,10 @@ impl FolioApp {
                     .and_then(|p| p.file_name())
                     .map(|s| s.to_string_lossy().to_string())
                     .unwrap_or("Untitled".into());
-                ui.add(egui::Label::new(egui::RichText::new(name).strong()).truncate());
+                ui.add_sized([(ui.available_width() - if self.read_only { 72.0 } else { 0.0 } - if self.editor.is_dirty() { 80.0 } else { 0.0 }).clamp(40.0, 180.0), 28.0], egui::Label::new(egui::RichText::new(&name).strong()).truncate()).on_hover_text(name);
                 if self.read_only { ui.colored_label(theme::muted(self.dark_mode), "Read-only"); }
                 if self.editor.is_dirty() {
                     ui.colored_label(theme::muted(self.dark_mode), "• Unsaved");
-                }
-            });
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                for (label, tab) in [
-                    ("File", Tab::File),
-                    ("Home", Tab::Home),
-                    ("Layout", Tab::Layout),
-                    ("View", Tab::View),
-                ] {
-                    if ui.selectable_label(self.tab == tab, label).clicked() {
-                        self.tab = tab;
-                    }
                 }
             });
             ui.separator();
@@ -1686,24 +1688,25 @@ impl FolioApp {
                             ("Save", Action::Save),
                             ("Save As…", Action::SaveAs),
                         ] {
-                            if ui
-                                .add(IconButton::new(Icon::for_action(action), label))
-                                .clicked()
-                            {
+                            if ui.add(IconButton::new(Icon::for_action(action), label)).clicked() {
                                 self.action(action, ctx);
                             }
                         }
-                    });
-                    ui.horizontal_wrapped(|ui| {
-                        for (label, icon, tool) in [("Templates…", Icon::Templates, workbench::Tool::Templates), ("Duplicate…", Icon::Copy, workbench::Tool::Duplicate), ("Export text…", Icon::ExportText, workbench::Tool::ExportText), ("Export selection…", Icon::ExportSelection, workbench::Tool::ExportSelection)] {
-                            if ui.add_enabled(!matches!(tool, workbench::Tool::ExportSelection) || !self.editor.selection().is_collapsed(), IconButton::new(icon, label)).clicked() { self.run_tool(tool, ctx); }
+                        ui.separator();
+                        for (label, icon, tool) in [("Templates…", Icon::Templates, workbench::Tool::Templates), ("Duplicate…", Icon::Copy, workbench::Tool::Duplicate)] {
+                            if ui.add(IconButton::new(icon, label)).clicked() { self.run_tool(tool, ctx); }
                         }
+                        ui.menu_button("Export", |ui| {
+                            for (label, icon, tool) in [("Export text…", Icon::ExportText, workbench::Tool::ExportText), ("Export selection…", Icon::ExportSelection, workbench::Tool::ExportSelection)] {
+                                if ui.add_enabled(!matches!(tool, workbench::Tool::ExportSelection) || !self.editor.selection().is_collapsed(), IconButton::new(icon, label)).clicked() { self.run_tool(tool, ctx); ui.close(); }
+                            }
+                        });
+                        self.recent_documents_ui(ui, ctx);
                     });
-                    ui.label("DOCX • A warned import always saves as a converted copy.");
-                    self.recent_documents_ui(ui, ctx);
                 }
                 Tab::Home => {
                     ui.horizontal_wrapped(|ui| {
+                        ui.menu_button("Clipboard", |ui| {
                         for (label, action, key) in [
                             ("Cut", Action::Cut, "X"),
                             ("Copy", Action::Copy, "C"),
@@ -1719,20 +1722,22 @@ impl FolioApp {
                             if ui
                                 .add_enabled(
                                     enabled,
-                                    IconButton::new(Icon::for_action(action), label).compact(),
+                                    IconButton::new(Icon::for_action(action), label),
                                 )
                                 .on_hover_text(format!("{label} ({command}{key})"))
                                 .clicked()
                             {
                                 self.action(action, ctx);
+                                ui.close();
                             }
                         }
+                        });
                         ui.separator();
                         if self.read_only { ui.disable(); }
+                        ui.menu_button("Edit", |ui| {
                         if ui
                             .add(
-                                IconButton::new(Icon::ClearFormatting, "Clear formatting")
-                                    .compact(),
+                                IconButton::new(Icon::ClearFormatting, "Clear formatting"),
                             )
                             .on_hover_text(
                                 "Reset text to Noto Sans, 12 pt, black; keep paragraph layout",
@@ -1740,38 +1745,19 @@ impl FolioApp {
                             .clicked()
                         {
                             self.action(Action::ClearFormatting, ctx);
+                            ui.close();
                         }
                         self.writing_tools_ui(ui);
+                        });
                         ui.separator();
                         let style = self.current_style();
-                        for (label, selected, action) in [
-                            ("Bold", style.bold, Action::Bold),
-                            ("Italic", style.italic, Action::Italic),
-                            ("Underline", style.underline, Action::Underline),
-                            ("Strike", style.strikethrough, Action::Strike),
-                            ("Superscript", style.vertical_align == VerticalAlign::Superscript, Action::Superscript),
-                            ("Subscript", style.vertical_align == VerticalAlign::Subscript, Action::Subscript),
-                        ] {
-                            if ui
-                                .add(
-                                    IconButton::new(Icon::for_action(action), label)
-                                        .selected(selected)
-                                        .compact(),
-                                )
-                                .on_hover_text(format!("Toggle {label}"))
-                                .clicked()
-                            {
-                                self.action(action, ctx);
-                            }
-                        }
-                        self.highlight_control(ui, &style);
-                        ui.separator();
                         let mut family = if layout::is_serif_family(&style.font_family) {
                             "serif"
                         } else {
                             "sans-serif"
                         };
                         egui::ComboBox::from_id_salt("font-family")
+                            .width(100.0)
                             .selected_text(if family == "serif" {
                                 "Noto Serif"
                             } else {
@@ -1816,6 +1802,28 @@ impl FolioApp {
                         }
                         ui.separator();
 
+                        for (label, selected, action) in [
+                            ("Bold", style.bold, Action::Bold),
+                            ("Italic", style.italic, Action::Italic),
+                            ("Underline", style.underline, Action::Underline),
+                            ("Strike", style.strikethrough, Action::Strike),
+                            ("Superscript", style.vertical_align == VerticalAlign::Superscript, Action::Superscript),
+                            ("Subscript", style.vertical_align == VerticalAlign::Subscript, Action::Subscript),
+                        ] {
+                            if ui
+                                .add(
+                                    IconButton::new(Icon::for_action(action), label)
+                                        .selected(selected)
+                                        .compact(),
+                                )
+                                .on_hover_text(format!("Toggle {label}"))
+                                .clicked()
+                            {
+                                self.action(action, ctx);
+                            }
+                        }
+                        self.highlight_control(ui, &style);
+                        ui.separator();
                         let alignment = self
                             .editor
                             .document()
@@ -1855,7 +1863,7 @@ impl FolioApp {
                             }
                         }
                         if ui
-                            .add(IconButton::new(Icon::Find, "Find / Replace"))
+                            .add(IconButton::new(Icon::Find, "Find / Replace").compact())
                             .on_hover_text("Find and replace text (Command/Ctrl + F)")
                             .clicked()
                         {
@@ -1866,8 +1874,7 @@ impl FolioApp {
                                 self.action(Action::Find, ctx);
                             }
                         }
-                    });
-                    ui.horizontal_wrapped(|ui| {
+                        ui.menu_button("Paragraph", |ui| {
                         if self.read_only { ui.disable(); }
                         let p = self
                             .editor
@@ -1906,6 +1913,7 @@ impl FolioApp {
                             }
                         }
                         self.line_spacing_control(ui, p.line_spacing);
+                        });
                     });
                 }
                 Tab::Layout => {
@@ -1972,8 +1980,9 @@ impl FolioApp {
                     });
                 }
                 Tab::View => {
+                    ui.horizontal_wrapped(|ui| {
                     if ui.add(IconButton::new(Icon::ReadOnly, "Read-only mode").selected(self.read_only)).on_hover_text("Editing mode; navigation, copying and exports remain available").clicked() { self.toggle_read_only(); }
-                    ui.horizontal(|ui| {
+                    ui.menu_button("Zoom", |ui| {
                         ui.label("Zoom");
                         ui.add(
                             egui::Slider::new(&mut self.zoom, 0.25..=2.5)
@@ -1989,9 +1998,8 @@ impl FolioApp {
                             self.fit_page_width(ctx);
                         }
                     });
-                    ui.horizontal_wrapped(|ui| self.workbench_controls(ui));
-                    ui.separator();
-                    ui.horizontal_wrapped(|ui| {
+                    ui.menu_button("Navigation & writing", |ui| self.workbench_controls(ui));
+                    ui.menu_button("Appearance & tools", |ui| {
                         if ui
                             .add(IconButton::new(
                                 if self.focus_mode { Icon::ExitFocus } else { Icon::Focus },
@@ -2026,6 +2034,7 @@ impl FolioApp {
                         {
                             self.show_ai_connection = true;
                         }
+                    });
                     });
                 }
             }
@@ -2130,6 +2139,7 @@ impl FolioApp {
                 let row_height = ui.spacing().interact_size.y;
                 let mut results = egui::ScrollArea::vertical()
                     .id_salt("find-results")
+                    .min_scrolled_height((matches.len().min(3) as f32 * (row_height + ui.spacing().item_spacing.y)).min(96.0))
                     .max_height(96.0);
                 if let Some(destination) = navigate {
                     results = results.vertical_scroll_offset(destination as f32 * (row_height + ui.spacing().item_spacing.y));
@@ -2460,7 +2470,7 @@ impl FolioApp {
             .frame(
                 egui::Frame::new()
                     .fill(theme::workspace(self.dark_mode))
-                    .inner_margin(24.0),
+                    .inner_margin(16.0),
             )
             .show(ctx, |ui| {
                 if self.workbench_blocks_editing()
@@ -2923,9 +2933,12 @@ impl eframe::App for FolioApp {
         if !self.focus_mode {
             let frame = egui::Frame::new()
                 .fill(theme::surface(self.dark_mode))
-                .inner_margin(egui::Margin::symmetric(16, 8));
+                .inner_margin(egui::Margin::symmetric(12, 3));
             let panel = egui::TopBottomPanel::bottom("status").frame(frame);
             panel.show(ctx, |ui| {
+            ui.spacing_mut().interact_size.y = 24.0;
+            ui.spacing_mut().button_padding.y = 3.0;
+            ui.spacing_mut().slider_width = 100.0;
             ui.horizontal_wrapped(|ui| {
                 let total = editing::document_statistics(self.editor.document());
                 if self.read_only { ui.label("Read-only"); }
@@ -4695,7 +4708,7 @@ mod app_tests {
                     },
                 })
                 .unwrap();
-            frame(&mut app, &ctx, vec![]);
+            click_search_text(&mut app, &ctx, "Paragraph");
             let output = frame(&mut app, &ctx, vec![]);
             assert!(
                 output.shapes.iter().any(|s| has_text(&s.shape, expected)),
@@ -4710,6 +4723,7 @@ mod app_tests {
                     .line_spacing,
                 spacing
             );
+            frame(&mut app, &ctx, vec![key(Key::Escape, Default::default())]);
         }
     }
     #[test]
@@ -5154,6 +5168,138 @@ mod app_tests {
         app.canvas(ctx);
         ctx.end_pass()
     }
+    #[test]
+    fn compact_ribbon_bounds_controls_and_long_document_titles() {
+        for width in [1180.0, 800.0] {
+            for tab in [Tab::Home, Tab::File, Tab::Layout, Tab::View] {
+                let ctx = egui::Context::default();
+                layout::install_fonts(&ctx);
+                theme::install(&ctx);
+                ctx.enable_accesskit();
+                let mut app = FolioApp {
+                    tab,
+                    ..Default::default()
+                };
+                app.path = Some(PathBuf::from(
+                    "A very long document name that must remain inside the compact header without displacing controls.docx",
+                ));
+                app.insert("draft".into());
+                app.read_only = true;
+                for _ in 0..3 {
+                    ctx.begin_pass(egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            Vec2::new(width, 850.0),
+                        )),
+                        ..Default::default()
+                    });
+                    app.ribbon(&ctx);
+                    let height = ctx.available_rect().top();
+                    let output = ctx.end_pass();
+
+                    let limit = if width == 1180.0 { 100.0 } else { 136.0 };
+                    assert!(
+                        height <= limit,
+                        "{tab:?} at {width}: ribbon height {height} exceeds {limit}"
+                    );
+                    for (_, node) in output.platform_output.accesskit_update.unwrap().nodes {
+                        if node.role() == egui::accesskit::Role::Button
+                            && let Some(bounds) = node.bounds()
+                        {
+                            assert!(
+                                bounds.x0 >= 0.0
+                                    && bounds.x1 <= width as f64 + 1.0
+                                    && bounds.y1 <= height as f64 + 1.0,
+                                "{tab:?} at {width}: {:?} escaped ribbon: {bounds:?}",
+                                node.label()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    #[test]
+    fn compact_popovers_are_keyboard_reachable_and_fit_small_viewports() {
+        for (tab, menu, action) in [
+            (Tab::Home, "Clipboard", "Paste"),
+            (Tab::Home, "Edit", "Clear formatting"),
+            (Tab::Home, "Paragraph", "Before"),
+            (Tab::File, "Export", "Export text…"),
+            (
+                Tab::File,
+                "Recent Documents",
+                "Your opened documents will appear here.",
+            ),
+            (Tab::View, "Zoom", "Fit page width"),
+            (Tab::View, "Navigation & writing", "Commands"),
+            (Tab::View, "Appearance & tools", "Document info"),
+        ] {
+            let ctx = egui::Context::default();
+            layout::install_fonts(&ctx);
+            theme::install(&ctx);
+            ctx.enable_accesskit();
+            let mut app = FolioApp {
+                tab,
+                ..Default::default()
+            };
+            let mut draw = |events| {
+                ctx.begin_pass(egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(800.0, 500.0),
+                    )),
+                    events,
+                    ..Default::default()
+                });
+                app.ribbon(&ctx);
+                ctx.end_pass()
+            };
+            draw(vec![]);
+            let mut reached = false;
+            for _ in 0..60 {
+                let output = draw(vec![key(Key::Tab, Default::default())]);
+                let update = output.platform_output.accesskit_update.unwrap();
+                if update
+                    .nodes
+                    .iter()
+                    .any(|(id, node)| *id == update.focus && node.label() == Some(menu))
+                {
+                    reached = true;
+                    break;
+                }
+            }
+            assert!(reached, "{menu} must be reachable with Tab at 800 points");
+            draw(vec![key(Key::Enter, Default::default())]);
+            draw(vec![]);
+            let output = draw(vec![]);
+            let update = output.platform_output.accesskit_update.unwrap();
+            assert!(
+                update
+                    .nodes
+                    .iter()
+                    .any(|(_, node)| node.label() == Some(action)) || output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == action)),
+                "{menu} did not expose {action}: {:?}",
+                update
+                    .nodes
+                    .iter()
+                    .filter_map(|(_, node)| node.label())
+                    .collect::<Vec<_>>()
+            );
+            for (_, node) in update.nodes {
+                if let Some(bounds) = node.bounds() {
+                    assert!(
+                        bounds.x0 >= -1.0
+                            && bounds.x1 <= 801.0
+                            && bounds.y0 >= -1.0
+                            && bounds.y1 <= 501.0,
+                        "{menu}: {:?} outside viewport: {bounds:?}",
+                        node.label()
+                    );
+                }
+            }
+        }
+    }
     fn key(key: Key, modifiers: egui::Modifiers) -> egui::Event {
         egui::Event::Key {
             key,
@@ -5179,6 +5325,12 @@ mod app_tests {
             .unwrap_or_else(|| panic!("missing search control or result: {label}"))
     }
     fn click_search_text(app: &mut FolioApp, ctx: &egui::Context, label: &str) -> bool {
+        if ["Aa", "Symbols"].contains(&label) {
+            let output = frame(app, ctx, vec![]);
+            if !output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == label)) {
+                click_search_text(app, ctx, "Edit");
+            }
+        }
         frame(app, ctx, vec![]);
         let output = frame(app, ctx, vec![]);
         let pos = search_text_position(&output, label);
@@ -5519,15 +5671,21 @@ mod app_tests {
                 .filter_map(|(_, node)| node.label().map(str::to_owned))
                 .collect::<Vec<_>>()
         };
+        click_search_text(&mut app, &ctx, "Edit");
         let output = frame(&mut app, &ctx, vec![]);
         assert!(labels(&output).contains(&"Change case".into()));
-        assert!(labels(&output).contains(&"Symbols".into()));
+        assert!(
+            labels(&output).contains(&"Symbols".into()),
+            "labels: {:?}",
+            labels(&output)
+        );
         click_search_text(&mut app, &ctx, "Aa");
         let output = frame(&mut app, &ctx, vec![]);
         for action in ["UPPERCASE", "lowercase", "Title case", "Sentence case"] {
             assert!(labels(&output).contains(&action.into()));
         }
         frame(&mut app, &ctx, vec![key(Key::Escape, Default::default())]);
+        click_search_text(&mut app, &ctx, "Edit");
         let mut symbols_focused = false;
         for _ in 0..80 {
             let output = frame(&mut app, &ctx, vec![key(Key::Tab, Default::default())]);

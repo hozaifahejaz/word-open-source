@@ -737,6 +737,39 @@ mod tests {
         };
         frame(&mut app, &ctx, vec![]);
         let output = frame(&mut app, &ctx, vec![]);
+        let bounds = output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .unwrap()
+            .nodes
+            .iter()
+            .find_map(|(_, node)| {
+                (node.label() == Some("Navigation & writing"))
+                    .then(|| node.bounds())
+                    .flatten()
+            })
+            .unwrap();
+        let pos = egui::pos2(
+            ((bounds.x0 + bounds.x1) / 2.0) as f32,
+            ((bounds.y0 + bounds.y1) / 2.0) as f32,
+        );
+        for pressed in [true, false] {
+            frame(
+                &mut app,
+                &ctx,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    },
+                ],
+            );
+        }
+        let output = frame(&mut app, &ctx, vec![]);
         for label in [
             "Commands",
             "Writing progress",

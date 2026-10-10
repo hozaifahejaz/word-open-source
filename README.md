@@ -18,6 +18,12 @@ save automatically after five idle seconds. Untitled documents and warned import
 use local recovery checkpoints; startup offers explicit Restore or Discard,
 and restored content stays unsaved. Recovery preserves warning/source protection.
 
+The compact header keeps File, Home, Layout and View alongside document shortcuts.
+Home groups clipboard actions in Clipboard, case/symbol/writing tools in Edit,
+and paragraph spacing in Paragraph. File includes Recent Documents and Export
+pickers; View groups zoom, navigation/writing, and appearance/tools in menus.
+Everyday text formatting remains directly available on Home.
+
 See [feature boundaries](docs/FEATURES.md) and [actual acceptance results](docs/ACCEPTANCE.md).
 
 ## Apple Silicon local app

@@ -1012,22 +1012,22 @@ impl FolioApp {
             LineSpacing::Exact(n) | LineSpacing::AtLeast(n) => n,
             _ => 240,
         };
-        egui::ComboBox::from_id_salt("spacing")
-            .selected_text(text)
-            .show_ui(ui, |ui| {
-                for n in [100, 115, 150, 200] {
-                    ui.selectable_value(
-                        &mut spacing,
-                        LineSpacing::Multiple(n),
-                        format!("{}×", f64::from(n) / 100.0),
-                    );
-                }
-                ui.separator();
-                ui.selectable_value(&mut spacing, LineSpacing::Exact(height), "Exactly");
-                ui.selectable_value(&mut spacing, LineSpacing::AtLeast(height), "At least");
-            })
-            .response
-            .labelled_by(label.id);
+        // A nested menu shares the Paragraph menu's open state. A ComboBox
+        // would replace it because egui supports only one memory popup.
+        ui.menu_button(text, |ui| {
+            for n in [100, 115, 150, 200] {
+                ui.selectable_value(
+                    &mut spacing,
+                    LineSpacing::Multiple(n),
+                    format!("{}×", f64::from(n) / 100.0),
+                );
+            }
+            ui.separator();
+            ui.selectable_value(&mut spacing, LineSpacing::Exact(height), "Exactly");
+            ui.selectable_value(&mut spacing, LineSpacing::AtLeast(height), "At least");
+        })
+        .response
+        .labelled_by(label.id);
         let mode_changed = spacing != current;
         let mut response = None;
         if let LineSpacing::Exact(height) | LineSpacing::AtLeast(height) = spacing {
@@ -1874,7 +1874,9 @@ impl FolioApp {
                                 self.action(Action::Find, ctx);
                             }
                         }
-                        ui.menu_button("Paragraph", |ui| {
+                        egui::containers::menu::MenuButton::new("Paragraph")
+                            .config(egui::containers::menu::MenuConfig::new().close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside))
+                            .ui(ui, |ui| {
                         if self.read_only { ui.disable(); }
                         let p = self
                             .editor
@@ -1982,20 +1984,25 @@ impl FolioApp {
                 Tab::View => {
                     ui.horizontal_wrapped(|ui| {
                     if ui.add(IconButton::new(Icon::ReadOnly, "Read-only mode").selected(self.read_only)).on_hover_text("Editing mode; navigation, copying and exports remain available").clicked() { self.toggle_read_only(); }
-                    ui.menu_button("Zoom", |ui| {
+                    egui::containers::menu::MenuButton::new("Zoom")
+                        .config(egui::containers::menu::MenuConfig::new().close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside))
+                        .ui(ui, |ui| {
                         ui.label("Zoom");
                         ui.add(
                             egui::Slider::new(&mut self.zoom, 0.25..=2.5)
-                                .custom_formatter(|n, _| format!("{:.0}%", n * 100.0)),
+                                .custom_formatter(|n, _| format!("{:.0}%", n * 100.0))
+                                .custom_parser(|text| text.trim().trim_end_matches('%').trim().parse::<f64>().ok().map(|percent| percent / 100.0)),
                         );
                         if ui.add(IconButton::new(Icon::Zoom, "100%")).clicked() {
                             self.zoom = 1.0;
+                            ui.close();
                         }
                         if ui
                             .add(IconButton::new(Icon::FitWidth, "Fit page width"))
                             .clicked()
                         {
                             self.fit_page_width(ctx);
+                            ui.close();
                         }
                     });
                     ui.menu_button("Navigation & writing", |ui| self.workbench_controls(ui));
@@ -2986,7 +2993,8 @@ impl eframe::App for FolioApp {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.add(
                         egui::Slider::new(&mut self.zoom, 0.25..=2.5)
-                            .custom_formatter(|n, _| format!("{:.0}%", n * 100.0)),
+                            .custom_formatter(|n, _| format!("{:.0}%", n * 100.0))
+                                .custom_parser(|text| text.trim().trim_end_matches('%').trim().parse::<f64>().ok().map(|percent| percent / 100.0)),
                     )
                     .on_hover_text("Document zoom");
                 });
@@ -4686,7 +4694,14 @@ mod app_tests {
     fn line_spacing_control_displays_exact_and_minimum_imported_values() {
         fn has_text(shape: &egui::Shape, expected: &str) -> bool {
             match shape {
-                egui::Shape::Text(text) => text.galley.job.text == expected,
+                egui::Shape::Text(text) => {
+                    text.galley
+                        .job
+                        .text
+                        .strip_suffix(" ⏵")
+                        .unwrap_or(&text.galley.job.text)
+                        == expected
+                }
                 egui::Shape::Vec(shapes) => shapes.iter().any(|shape| has_text(shape, expected)),
                 _ => false,
             }
@@ -5300,6 +5315,229 @@ mod app_tests {
             }
         }
     }
+    fn replace_popup_number(app: &mut FolioApp, ctx: &egui::Context, displayed: &str, input: &str) {
+        click_search_text(app, ctx, displayed);
+        frame(
+            app,
+            ctx,
+            vec![key(
+                Key::A,
+                egui::Modifiers {
+                    command: true,
+                    mac_cmd: true,
+                    ..Default::default()
+                },
+            )],
+        );
+        frame(app, ctx, vec![egui::Event::Text(input.into())]);
+        frame(app, ctx, vec![key(Key::Enter, Default::default())]);
+    }
+    fn popup_has_text(app: &mut FolioApp, ctx: &egui::Context, label: &str) -> bool {
+        let output = frame(app, ctx, vec![]);
+        output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == label))
+    }
+    #[test]
+    fn paragraph_popup_keeps_numeric_and_nested_spacing_controls_open() {
+        let ctx = egui::Context::default();
+        layout::install_fonts(&ctx);
+        let mut app = FolioApp::default();
+        app.insert("preserve selected text".into());
+        let selection = editing::select_all(app.editor.document());
+        app.editor.set_selection(selection).unwrap();
+        app.editor.mark_saved();
+        click_search_text(&mut app, &ctx, "Paragraph");
+        replace_popup_number(&mut app, &ctx, "0 pt", "12");
+        assert_eq!(
+            app.editor
+                .document()
+                .paragraph(0)
+                .unwrap()
+                .style
+                .space_before_twips,
+            240
+        );
+        assert_eq!(
+            app.editor.document().paragraph(0).unwrap().text(),
+            "preserve selected text"
+        );
+        assert_eq!(app.editor.selection(), selection);
+        assert!(popup_has_text(&mut app, &ctx, "Before"));
+        replace_popup_number(&mut app, &ctx, "0 pt", "6");
+        assert_eq!(
+            app.editor
+                .document()
+                .paragraph(0)
+                .unwrap()
+                .style
+                .space_after_twips,
+            120
+        );
+        assert_eq!(app.editor.selection(), selection);
+        let current = app
+            .editor
+            .document()
+            .paragraph(0)
+            .unwrap()
+            .style
+            .line_spacing;
+        let LineSpacing::Multiple(n) = current else {
+            panic!("default must be multiple")
+        };
+        click_search_text(&mut app, &ctx, &format!("{}×", f64::from(n) / 100.0));
+        click_search_text(&mut app, &ctx, "Exactly");
+        assert_eq!(
+            app.editor
+                .document()
+                .paragraph(0)
+                .unwrap()
+                .style
+                .line_spacing,
+            LineSpacing::Exact(240)
+        );
+        assert!(popup_has_text(&mut app, &ctx, "Height"));
+        // Before and line height both display12 pt; choose the numeric widget below Height.
+        let output = frame(&mut app, &ctx, vec![]);
+        let height_label = search_text_position(&output, "Height");
+
+        let pos = output
+            .shapes
+            .iter()
+            .find_map(|shape| {
+                if let egui::Shape::Text(text) = &shape.shape
+                    && text.galley.job.text == "12.0 pt"
+                    && text.pos.y > height_label.y
+                {
+                    Some(text.pos + text.galley.size() * 0.5)
+                } else {
+                    None
+                }
+            })
+            .expect("line height numeric control");
+        for pressed in [true, false] {
+            frame(
+                &mut app,
+                &ctx,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    },
+                ],
+            );
+        }
+        frame(
+            &mut app,
+            &ctx,
+            vec![key(
+                Key::A,
+                egui::Modifiers {
+                    command: true,
+                    mac_cmd: true,
+                    ..Default::default()
+                },
+            )],
+        );
+        frame(&mut app, &ctx, vec![egui::Event::Text("18.5".into())]);
+        frame(&mut app, &ctx, vec![key(Key::Enter, Default::default())]);
+        assert_eq!(
+            app.editor
+                .document()
+                .paragraph(0)
+                .unwrap()
+                .style
+                .line_spacing,
+            LineSpacing::Exact(370)
+        );
+        assert_eq!(app.editor.selection(), selection);
+        assert!(popup_has_text(&mut app, &ctx, "Before"));
+        click_search_text(&mut app, &ctx, "Exactly 18.5 pt");
+        click_search_text(&mut app, &ctx, "At least");
+        replace_popup_number(&mut app, &ctx, "18.5 pt", "20");
+        assert_eq!(
+            app.editor
+                .document()
+                .paragraph(0)
+                .unwrap()
+                .style
+                .line_spacing,
+            LineSpacing::AtLeast(400)
+        );
+        assert_eq!(app.editor.selection(), selection);
+        assert!(popup_has_text(&mut app, &ctx, "Before"));
+        frame(&mut app, &ctx, vec![key(Key::Escape, Default::default())]);
+        assert!(!popup_has_text(&mut app, &ctx, "Before"));
+        click_search_text(&mut app, &ctx, "Paragraph");
+        let pos = egui::pos2(600.0, 400.0);
+        for pressed in [true, false] {
+            frame(
+                &mut app,
+                &ctx,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    },
+                ],
+            );
+        }
+        assert!(!popup_has_text(&mut app, &ctx, "Before"));
+    }
+    #[test]
+    fn zoom_popup_keeps_numeric_edit_open_and_preserves_document_selection() {
+        let ctx = egui::Context::default();
+        layout::install_fonts(&ctx);
+        let mut app = FolioApp {
+            tab: Tab::View,
+            ..Default::default()
+        };
+        app.insert("preserve selected text".into());
+        let selection = editing::select_all(app.editor.document());
+        app.editor.set_selection(selection).unwrap();
+        app.editor.mark_saved();
+        let document = app.editor.document().clone();
+        click_search_text(&mut app, &ctx, "Zoom");
+        replace_popup_number(&mut app, &ctx, "100%", "150%");
+        assert!((app.zoom - 1.5).abs() < 0.001, "zoom:{}", app.zoom);
+        assert_eq!(app.editor.document(), &document);
+        assert_eq!(app.editor.selection(), selection);
+        assert!(popup_has_text(&mut app, &ctx, "Fit page width"));
+        frame(&mut app, &ctx, vec![key(Key::Escape, Default::default())]);
+        assert!(!popup_has_text(&mut app, &ctx, "Fit page width"));
+        click_search_text(&mut app, &ctx, "Zoom");
+        let pos = egui::pos2(600.0, 400.0);
+        for pressed in [true, false] {
+            frame(
+                &mut app,
+                &ctx,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    },
+                ],
+            );
+        }
+        assert!(!popup_has_text(&mut app, &ctx, "Fit page width"));
+        frame(&mut app, &ctx, vec![egui::Event::Text("!".into())]);
+        assert!(
+            app.editor
+                .document()
+                .paragraph(0)
+                .unwrap()
+                .text()
+                .contains('!'),
+            "outside click must release popup keyboard focus to canvas"
+        );
+    }
     fn key(key: Key, modifiers: egui::Modifiers) -> egui::Event {
         egui::Event::Key {
             key,
@@ -5315,7 +5553,13 @@ mod app_tests {
             .iter()
             .find_map(|shape| {
                 if let egui::Shape::Text(text) = &shape.shape
-                    && text.galley.job.text == label
+                    && text
+                        .galley
+                        .job
+                        .text
+                        .strip_suffix(" ⏵")
+                        .unwrap_or(&text.galley.job.text)
+                        == label
                 {
                     Some(text.pos + text.galley.size() * 0.5)
                 } else {

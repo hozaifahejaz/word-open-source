@@ -458,13 +458,14 @@ fn document(app: &FolioApp) -> Value {
     let stats = editing::document_statistics(app.editor.document());
     json!({"blocks":blocks,"page_layout":page_layout(&app.editor.document().page_layout),"read_only":app.read_only,"selection":range(app.editor.selection()),"path":app.path.as_ref().map(|p|p.to_string_lossy()),"dirty":app.editor.is_dirty(),"can_undo":app.editor.can_undo(),"can_redo":app.editor.can_redo(),"statistics":{"words":stats.words,"characters":stats.characters},"warnings":app.warnings.iter().map(|w|&w.message).collect::<Vec<_>>()})
 }
-fn check_path(path: &std::path::Path) -> Result<(), String> {
-    if !path.is_absolute()
+fn check_destination_path(path: &std::path::Path, extension: &str) -> Result<(), String> {
+    if path.as_os_str().is_empty()
+        || !path.is_absolute()
         || !path
             .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("docx"))
+            .is_some_and(|ext| ext.eq_ignore_ascii_case(extension))
     {
-        return Err("Use an absolute .docx path".into());
+        return Err(format!("Use a nonempty absolute .{extension} path"));
     }
     Ok(())
 }
@@ -520,11 +521,13 @@ pub fn call(app: &mut FolioApp, name: &str, arguments: Value) -> Result<Value, S
         }
         "folio_duplicate_document" => {
             let a: Save = args(arguments)?;
+            check_destination_path(&a.path, "docx")?;
             app.duplicate_to(a.path.clone(), a.overwrite)?;
             return Ok(json!({"duplicated":true,"path":a.path}));
         }
         "folio_export_text" => {
             let a: ExportInput = args(arguments)?;
+            check_destination_path(&a.path, "txt")?;
             app.export_text_to(
                 a.path.clone(),
                 a.selection.map(Range::selection),
@@ -668,7 +671,7 @@ pub fn call(app: &mut FolioApp, name: &str, arguments: Value) -> Result<Value, S
         }
         "folio_open_document" => {
             let a: Open = args(arguments)?;
-            check_path(&a.path)?;
+            check_destination_path(&a.path, "docx")?;
             check_unsaved(app, a.discard_unsaved)?;
             app.open_document(a.path)?;
             reset_edit_state(app);
@@ -676,7 +679,7 @@ pub fn call(app: &mut FolioApp, name: &str, arguments: Value) -> Result<Value, S
         }
         "folio_save_document" => {
             let a: Save = args(arguments)?;
-            check_path(&a.path)?;
+            check_destination_path(&a.path, "docx")?;
             if a.path.exists() && !a.overwrite {
                 return Err(
                     "Destination exists: explicitly set overwrite=true to replace it".into(),
@@ -1226,6 +1229,67 @@ mod tests {
         )
         .unwrap();
         assert!(!app.editor.is_dirty());
+    }
+    #[test]
+    fn copy_export_reject_relative_and_empty_paths_without_side_effects() {
+        let relative_dir = PathBuf::from(format!(
+            ".folio-mcp-path-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&relative_dir).unwrap();
+        struct OwnedDir(PathBuf);
+        impl Drop for OwnedDir {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _owned = OwnedDir(relative_dir.clone());
+        let mut app = FolioApp::default();
+        call(
+            &mut app,
+            "folio_replace_text",
+            json!({"selection":selection(0,0),"text":"Keep"}),
+        )
+        .unwrap();
+        app.typing = Some(TextStyle::default());
+        app.composition = Some("pending".into());
+        app.ime_enabled = true;
+        app.reveal = false;
+        let before = document(&app);
+        let mut failures = Vec::new();
+        for (name, extension) in [
+            ("folio_duplicate_document", "docx"),
+            ("folio_export_text", "txt"),
+        ] {
+            for path in [
+                relative_dir.join(format!("copy.{extension}")),
+                PathBuf::new(),
+                std::fs::canonicalize(&relative_dir)
+                    .unwrap()
+                    .join("wrong.bin"),
+            ] {
+                let result = call(&mut app, name, json!({"path":path,"overwrite":true}));
+                if result.is_ok() {
+                    failures.push(format!("{name}: {path:?}"));
+                }
+                assert_eq!(document(&app), before);
+                assert_eq!(app.typing, Some(TextStyle::default()));
+                assert_eq!(app.composition.as_deref(), Some("pending"));
+                assert!(app.ime_enabled);
+                assert!(!app.reveal);
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "relative/empty paths accepted: {failures:?}"
+        );
+        assert_eq!(std::fs::read_dir(&relative_dir).unwrap().count(), 0);
+        call(&mut app, "folio_undo", json!({})).unwrap();
+        assert_eq!(app.editor.document(), &Document::default());
     }
     #[test]
     fn parity_copy_export_readonly_save_preserve_state_and_protect_source() {

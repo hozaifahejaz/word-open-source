@@ -112,8 +112,8 @@ Text `color` and `highlight` use integer RGB channels:
 `"highlight": null` clears it. `vertical_align` is `baseline`, `superscript`, or
 `subscript`. Every nested input rejects unknown fields; explicit null is rejected
 for fields other than highlight. Invalid arguments leave selection, document and
-undo/redo history unchanged. DOCX supports a bounded highlight palette; arbitrary
-RGB highlight values can be mapped to that palette when saved.
+undo/redo history unchanged. DOCX preserves standard palette highlights with `w:highlight` and arbitrary RGB
+highlight values with clear `w:shd` run shading.
 
 Paragraph `alignment` is optional so spacing-only patches work.
 `space_before_twips` and `space_after_twips` are nonnegative integers.

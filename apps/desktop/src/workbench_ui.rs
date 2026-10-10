@@ -142,8 +142,16 @@ impl FolioApp {
     pub(crate) fn fit_page_width(&mut self, ctx: &egui::Context) {
         let available = ctx.screen_rect().width()
             - 80.
-            - if self.show_document_info { 228. } else { 0. }
-            - if self.workbench.progress { 230. } else { 0. };
+            - if self.show_document_info && !self.focus_mode {
+                228.
+            } else {
+                0.
+            }
+            - if self.workbench.progress && !self.focus_mode {
+                230.
+            } else {
+                0.
+            };
         let page = self
             .editor
             .document()
@@ -712,6 +720,43 @@ mod tests {
         assert_eq!(app.workbench.selected, 1);
         frame(&mut app, &ctx, vec![key(Key::ArrowUp, false)]);
         assert_eq!(app.workbench.selected, 0);
+    }
+    #[test]
+    fn fit_page_width_reserves_only_visible_side_panels() {
+        let ctx = egui::Context::default();
+        ctx.begin_pass(egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1200., 800.),
+            )),
+            ..Default::default()
+        });
+        let mut app = FolioApp::default();
+        let page = app
+            .editor
+            .document()
+            .page_layout
+            .effective_size()
+            .width_twips as f32
+            / 15.;
+        app.run_tool(Tool::FitWidth, &ctx);
+        let full_width = app.zoom;
+        assert!((full_width - 1120. / page).abs() < 0.0001);
+        app.workbench.progress = true;
+        app.run_tool(Tool::FitWidth, &ctx);
+        assert!((app.zoom - 890. / page).abs() < 0.0001);
+        app.show_document_info = true;
+        app.run_tool(Tool::FitWidth, &ctx);
+        assert!((app.zoom - 662. / page).abs() < 0.0001);
+        app.run_tool(Tool::Focus, &ctx);
+        assert!(app.workbench.progress);
+        app.run_tool(Tool::FitWidth, &ctx);
+        assert_eq!(app.zoom, full_width, "focus mode hides the progress panel");
+        // The palette can toggle info while focus mode is active; its panel is hidden.
+        app.run_tool(Tool::Info, &ctx);
+        app.run_tool(Tool::FitWidth, &ctx);
+        assert_eq!(app.zoom, full_width, "focus mode also hides document info");
+        let _ = ctx.end_pass();
     }
     #[test]
     fn progress_start_pause_reset_controls_preserve_document() {

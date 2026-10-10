@@ -418,3 +418,43 @@ benchmark remains intentionally ignored. Official Python MCP SDK 2.3.0 backgroun
 smoke passes against the fresh packaged executable, including DOCX formatting
 save/reopen. Live-window/native release smoke remains a separate release check;
 no user documents were exported or sent during this pass.
+
+## Polished editing release verification — 2026-10-10
+
+Independent task and whole-pass reviews approved the implementation after fixes
+for empty-script paragraph height, hidden focus-mode sidebar sizing, read-only
+autosave resumption, restored-document autosave eligibility, and absolute MCP
+copy/export paths. No outstanding code findings remained in those reviews.
+
+Final `sh scripts/validate-local.sh` passed formatting, all 199 tests (35 core
+commands, 6 recovery serialization, 132 desktop, 26 DOCX), warning-free Clippy
+and unsigned Apple Silicon packaging. One existing manual layout benchmark was
+intentionally ignored. The official Python MCP SDK 2.3.0 test passed against the
+fresh executable: 19 tools, read/edit/find/undo, disposable background parity,
+and DOCX formatting/page-layout save/reopen.
+
+Native macOS checks used disposable content and the actual bundled application.
+The old clean process was quit, its exit verified, and the fresh product build
+`bf86e51fc8b7` confirmed in Document info and `--version`. Home exposed the new
+formatting controls; Strike, Superscript and Yellow highlight visibly rendered.
+Command-K filtered and executed commands without inserting query text; writing
+progress Start/Pause/Reset worked. Invalid visual-line navigation showed an
+inline error; Escape returned canvas focus. Local date/time insertion and a
+built-in snippet both returned editor focus and each Undo restored the blank
+document. File controls displayed distinct template/duplicate/export icons.
+
+The gallery created a formatted unsaved Meeting notes document. Cancelling its
+replacement preserved its text; read-only prevented typing and Undo while keeping
+the accessible canvas focusable. Native duplicate and text export preserved the
+active untitled dirty document. Inspection of their disposable files confirmed
+matching paragraph text and retained bold DOCX template formatting. The test
+document was cleared and the app returned to a clean blank state. An unexpected
+preexisting unsaved draft was saved to a distinct local file before relaunch,
+rather than discarded. No live AI permission was enabled.
+
+Automated egui/input tests cover format painter, preference limits, Unicode
+wrapped navigation, read-only IME, drop dispatch, cancellation, failed writes and
+source alias protection. Real OS drag-and-drop, VoiceOver speech, Windows/Linux
+GUI, and Word/LibreOffice visual interoperability remain unverified. The broader
+roadmap still contains substantial deferred functionality; this release does not
+claim every requested feature is implemented.

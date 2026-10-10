@@ -348,3 +348,30 @@ Launch `open "$PWD/dist/Folio.app"`, perform the above GUI steps, then run
 The verifier expects the exact smoke edits described above; it does not drive GUI
 input or replace the codec's semantic regression tests. Ignored artifacts are
 local evidence, not delivered source artifacts or signed installation packages.
+
+## Writing workbench increment — 2026-10-10
+
+The desktop adds a bounded searchable Commands palette (Command/Ctrl-K), View
+shortcuts/navigation/snippets/progress controls, and Home writing tools. Focused
+RED/GREEN evidence includes invalid stored writing-goal refusal without replacing
+original bytes, and successful nonmodal palette execution restoring canvas focus.
+Egui tests verify query typing and formatting-shortcut isolation, Up/Down/Enter
+routing, disabled Undo/painter behavior, Escape cancellation and focus restoration,
+accessible View controls, and actual pointer activation of session Start/Pause/Reset
+without document changes. Navigation tests cover invalid/Unicode input, valid
+wrapped grapheme stops with visual-line hints, paragraph numbers, and empty-page
+scrolling without moving the selection. Rich format painting copies all style fields
+in one undoable edit while retaining paragraph properties; clearing paragraph
+formatting preserves runs. Date/time and snippet insertion replace the selection
+with one Undo step. UTC fallback calendar and label, Unicode snippet-title/UTF-8
+text bounds, goal defaults/round trips, and rejected state preservation are tested.
+
+`sh scripts/validate-local.sh` passed formatting, 184 workspace tests (35 core,
+6 recovery serialization, 117 desktop, 26 DOCX; 0 failures, one ignored manual
+benchmark), clippy with warnings denied, and unsigned Apple Silicon release
+packaging. The packaged executable's `--version` prints Folio 0.1.0 plus the
+embedded Git revision. Native window smoke remains a separate release step;
+these egui/CLI results do not establish Windows/Linux native UI or screen-reader
+speech behavior. Session timing uses monotonic wall time and is intentionally
+session-only. Reading/speaking estimates use 200/130 whitespace words per minute;
+snippets/goals are local workspace preferences with no network synchronization.

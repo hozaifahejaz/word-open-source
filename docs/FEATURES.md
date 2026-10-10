@@ -42,6 +42,7 @@ and build; published help scopes are recorded below without invented build numbe
 | Editing toolbar/statistics | Supported | Labeled original icons, plain-text Cut/Copy/Paste, clear text formatting; document/selection whitespace-word and grapheme counts | Desktop guide |
 | Find/replace | Supported | Literal paragraph-local, cross-run search; optional Unicode lowercase comparison and UAX #29 whole words; virtualized keyboard/mouse result navigation/counter; regex deferred | Design/edit; contracts |
 | Case conversion/symbols | Supported | Selection-only Unicode upper/lower/title/sentence case preserving rich document structure; 19 named symbol actions insert at caret or replace selection; undo/redo | [Acceptance evidence](ACCEPTANCE.md) |
+| Writing workbench | Supported | Searchable command palette, shortcut reference, 1-based page/wrapped-line/paragraph navigation, date/time insertion, one-use complete format painter, clear paragraph formatting, local goals/snippets and session timer | Desktop guide |
 | Alignment/spacing | Supported | Four alignments; before/after and multiple/exact/at-least spacing; indent/tab stops deferred | Desktop/web; ECMA Part 1 |
 | Page settings/breaks | Supported | One size/orientation/margin set and explicit breaks; automatic/explicit pagination implemented | Desktop/web; ECMA Part 1 |
 | Local workspace | Supported | File-tab Recent Documents (12 unique paths), unavailable-entry removal, per-document caret, remembered light/dark appearance and zoom | [Acceptance evidence](ACCEPTANCE.md) |

@@ -125,3 +125,36 @@ For the actual unsigned Apple Silicon bundle and GUI acceptance evidence, see
 `sh scripts/package-macos.sh` and `open "$PWD/dist/Folio.app"` from the root.
 Windows/Linux windowing, native dialogs, IME and Windows replacement/identity FFI
 need native-host testing; Mac results do not establish their behavior.
+
+## Writing workbench
+
+Command/Ctrl-K opens Commands in any editing view. Type to filter named actions,
+use Up/Down and Enter to execute, or Escape to cancel. Unavailable Undo/Redo,
+selection-only actions and the unapplied format painter are disabled. The View
+ribbon also provides Commands, Writing progress, Snippets, Keyboard shortcuts
+and Go to. Go to accepts 1-based page, wrapped visual line or paragraph numbers;
+invalid input leaves selection untouched. Blank pages scroll into view without
+inventing a caret. Soft-wrap navigation retains the visual row.
+
+Home's Writing tools menu inserts a local date/time, captures/applies a format
+painter, and clears paragraph formatting. Date/time uses the system `date` utility
+when available, with an explicitly labeled UTC fallback. Insertion replaces the
+selection as one undoable edit. Capture the source style, select the target text,
+then choose Apply format painter; it applies the entire text style once while
+preserving paragraph settings. Clear paragraph formatting restores alignment and
+spacing defaults without changing text or its run styles.
+
+Writing progress shows the current document's whitespace word count, an editable
+0–1,000,000 word goal (0 disables), and reading/speaking estimates at 200/130 words
+per minute. Start/Pause/Reset controls a session-only timer and net word change,
+including deletions and Undo. Goals and user snippets persist privately in the
+existing local workspace; there is no network synchronization. Three built-in
+snippets and up to 32 user snippets insert at the selection. Titles contain 1–80
+Unicode characters after trimming; text must be nonempty and at most 65,536 UTF-8
+bytes. Invalid stored preferences report an error and retain their original bytes.
+Schema-1 states default to no goal or user snippets; writes use schema 2.
+
+Document info and `folio-desktop --version` show the application version and
+build revision. `scripts/package-macos.sh` embeds the current Git revision;
+ordinary development builds show `development`. Fit page width accounts for
+visible Document info and Writing progress side panels.

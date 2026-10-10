@@ -7,6 +7,7 @@ use egui::{
 
 #[derive(Clone, Copy)]
 pub enum Icon {
+    Commands,
     Recent,
     New,
     Open,
@@ -93,6 +94,11 @@ impl Icon {
             painter.circle_stroke(point(x, y), r * rect.width() / 24.0, stroke);
         };
         match self {
+            Self::Commands => {
+                outline(3., 4., 18., 16.);
+                path(&[(7., 8.), (10., 12.), (7., 16.)]);
+                line((13., 16.), (17., 16.));
+            }
             Self::Recent => {
                 circle(12., 12., 9.);
                 line((12., 6.), (12., 12.));

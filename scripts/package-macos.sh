@@ -10,6 +10,7 @@ export TMPDIR="$root/.tools/tmp" TMP="$root/.tools/tmp" TEMP="$root/.tools/tmp"
 export PATH="$CARGO_HOME/bin:$PATH"
 mkdir -p "$TMPDIR"
 [ "$(uname -s)" = Darwin ] || { echo 'Requires macOS and Apple command-line tools' >&2; exit 1; }
+export FOLIO_BUILD_REVISION="$(git rev-parse --short=12 HEAD)"
 cargo build -p folio-desktop --release --target aarch64-apple-darwin --offline --locked
 bundle="$root/dist/Folio.app"
 mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources"

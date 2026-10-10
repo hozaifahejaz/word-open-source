@@ -35,6 +35,7 @@ pub enum StoreError {
     UnsupportedSchemaVersion(u32),
     InvalidPath(String),
     InvalidDocument(String),
+    InvalidPreferences(String),
 }
 impl fmt::Display for StoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -45,6 +46,7 @@ impl fmt::Display for StoreError {
                 write!(f, "Unsupported workspace schema version: {v}")
             }
             Self::InvalidPath(e) => write!(f, "Invalid stored path: {e}"),
+            Self::InvalidPreferences(e) => write!(f, "Invalid writing preferences: {e}"),
             Self::InvalidDocument(e) => write!(f, "Invalid recovered document: {e}"),
         }
     }
@@ -151,6 +153,10 @@ pub struct WorkspaceState {
     pub zoom: f32,
     pub recent: Vec<RecentDocument>,
     pub carets: Vec<SavedCaret>,
+    #[serde(default)]
+    pub word_goal: u32,
+    #[serde(default)]
+    pub snippets: Vec<crate::workbench::Snippet>,
 }
 impl Default for WorkspaceState {
     fn default() -> Self {
@@ -159,10 +165,23 @@ impl Default for WorkspaceState {
             zoom: 1.0,
             recent: vec![],
             carets: vec![],
+            word_goal: 0,
+            snippets: vec![],
         }
     }
 }
 impl WorkspaceState {
+    pub fn validate_writing(&self) -> Result<(), StoreError> {
+        if self.word_goal > 1_000_000 || self.snippets.len() > 32 {
+            return Err(StoreError::InvalidPreferences(
+                "Word goal must be 0–1,000,000; at most 32 snippets".into(),
+            ));
+        }
+        for snippet in &self.snippets {
+            snippet.validate().map_err(StoreError::InvalidPreferences)?;
+        }
+        Ok(())
+    }
     pub fn record_recent(&mut self, path: StoredPath, timestamp: u64) {
         self.remove_recent(&path);
         self.recent.insert(
@@ -266,12 +285,14 @@ impl WorkspaceStore {
             {
                 path.to_path()?;
             }
+            state.validate_writing()?;
             state.normalize();
         }
         Ok(state)
     }
     pub fn save_state(&self, state: &WorkspaceState) -> Result<(), StoreError> {
         self.load_state()?;
+        state.validate_writing()?;
         let mut state = state.clone();
         state.normalize();
         self.save("workspace.json", &state)
@@ -366,6 +387,58 @@ mod tests {
     }
     fn path(name: &str) -> StoredPath {
         StoredPath::from_path(Path::new(name)).unwrap()
+    }
+    #[test]
+    fn invalid_writing_preferences_preserve_stored_bytes() {
+        let dir = Directory::new();
+        fs::create_dir_all(&dir.0).unwrap();
+        let bytes = br#"{"schema_version":1,"data":{"dark_mode":false,"zoom":1.0,"recent":[],"carets":[],"word_goal":1000001,"snippets":[]}}"#;
+        fs::write(dir.0.join("workspace.json"), bytes).unwrap();
+        let store = WorkspaceStore::at(dir.0.clone());
+        assert!(store.load_state().is_err());
+        assert!(store.save_state(&WorkspaceState::default()).is_err());
+        assert_eq!(fs::read(dir.0.join("workspace.json")).unwrap(), bytes);
+    }
+    #[test]
+    fn writing_preferences_migrate_round_trip_and_reject_invalid_snippets() {
+        let old: WorkspaceState =
+            serde_json::from_str(r#"{"dark_mode":false,"zoom":1.0,"recent":[],"carets":[]}"#)
+                .unwrap();
+        assert_eq!(old.word_goal, 0);
+        assert!(old.snippets.is_empty());
+        let dir = Directory::new();
+        let store = WorkspaceStore::at(dir.0.clone());
+        let mut state = old;
+        state.word_goal = 1000000;
+        state.snippets.push(crate::workbench::Snippet {
+            title: "界".repeat(80),
+            text: "hello\nworld".into(),
+        });
+        store.save_state(&state).unwrap();
+        assert_eq!(store.load_state().unwrap().unwrap(), state);
+        let original = fs::read(dir.0.join("workspace.json")).unwrap();
+        state.snippets[0].title = " ".into();
+        assert!(store.save_state(&state).is_err());
+        assert_eq!(fs::read(dir.0.join("workspace.json")).unwrap(), original);
+        state.snippets = vec![
+            crate::workbench::Snippet {
+                title: "valid".into(),
+                text: "x".into()
+            };
+            33
+        ];
+        assert!(store.save_state(&state).is_err());
+        state.snippets = vec![crate::workbench::Snippet {
+            title: "valid".into(),
+            text: "x".repeat(65537),
+        }];
+        assert!(store.save_state(&state).is_err());
+        let bytes =
+            serde_json::to_vec(&serde_json::json!({"schema_version":2,"data":state})).unwrap();
+        fs::write(dir.0.join("workspace.json"), &bytes).unwrap();
+        assert!(store.load_state().is_err());
+        assert!(store.save_state(&WorkspaceState::default()).is_err());
+        assert_eq!(fs::read(dir.0.join("workspace.json")).unwrap(), bytes);
     }
     #[test]
     fn recent_presentation_uses_file_and_parent_names() {

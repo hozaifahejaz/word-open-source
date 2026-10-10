@@ -4,6 +4,8 @@ mod icons;
 mod layout;
 mod mcp;
 mod theme;
+mod workbench;
+mod workbench_ui;
 mod workspace;
 use document_core::*;
 use editing::{Action, move_to};
@@ -30,6 +32,7 @@ enum Pending {
     Quit,
 }
 struct FolioApp {
+    workbench: workbench::Workbench,
     editor: Editor,
     path: Option<PathBuf>,
     protected: Option<PathBuf>,
@@ -79,6 +82,7 @@ struct FolioApp {
 impl Default for FolioApp {
     fn default() -> Self {
         Self {
+            workbench: workbench::Workbench::default(),
             editor: Editor::default(),
             path: None,
             protected: None,
@@ -679,6 +683,7 @@ impl FolioApp {
         self.focus_canvas = true;
     }
     fn writing_tools_ui(&mut self, ui: &mut egui::Ui) {
+        self.productivity_controls(ui);
         let menu = ui.menu_button("Aa", |ui| {
             for (label, case) in [
                 ("UPPERCASE", TextCase::Upper),
@@ -1138,6 +1143,10 @@ impl FolioApp {
         }
     }
     fn global_shortcuts(&mut self, ctx: &egui::Context) {
+        if self.workbench_blocks_editing() {
+            return;
+        }
+
         if self.pending_recovery.is_some()
             || self.pending.is_some()
             || self.overwrite.is_some()
@@ -1156,6 +1165,11 @@ impl FolioApp {
             else {
                 continue;
             };
+            if modifiers.command && !modifiers.shift && !modifiers.alt && key == Key::K {
+                ctx.input_mut(|i| i.consume_key(modifiers, key));
+                self.open_palette();
+                break;
+            }
             if modifiers.command && modifiers.shift && !modifiers.alt {
                 let handled = match key {
                     Key::F => {
@@ -1215,6 +1229,9 @@ impl FolioApp {
                     .inner_margin(egui::Margin::symmetric(16, 6)),
             )
             .show(ctx, |ui| {
+                if self.workbench_blocks_editing() {
+                    ui.disable();
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
                         .add(IconButton::new(Icon::ExitFocus, "Exit focus mode").compact())
@@ -1274,6 +1291,11 @@ impl FolioApp {
                         .small()
                         .color(theme::muted(self.dark_mode)),
                 );
+                ui.label(format!("Folio {}", env!("CARGO_PKG_VERSION")));
+                ui.label(format!(
+                    "Build {}",
+                    option_env!("FOLIO_BUILD_REVISION").unwrap_or("development")
+                ));
                 ui.label(format!("{} pages", self.pages));
                 ui.label(format!("{} words", total.words));
                 ui.label(format!("{} characters", total.characters));
@@ -1374,7 +1396,7 @@ impl FolioApp {
             .inner_margin(egui::Margin::symmetric(24, 12));
         let panel = egui::TopBottomPanel::top("ribbon").frame(frame);
         panel.show(ctx, |ui| {
-            if self.pending_recovery.is_some() || self.pending.is_some() || self.overwrite.is_some() || self.error.is_some() {
+            if self.workbench_blocks_editing() || self.pending_recovery.is_some() || self.pending.is_some() || self.overwrite.is_some() || self.error.is_some() {
                 ui.disable();
             }
             ui.horizontal_wrapped(|ui| {
@@ -1749,17 +1771,10 @@ impl FolioApp {
                             .add(IconButton::new(Icon::FitWidth, "Fit page width"))
                             .clicked()
                         {
-                            self.zoom = ((ctx.screen_rect().width() - 80.0)
-                                / (self
-                                    .editor
-                                    .document()
-                                    .page_layout
-                                    .effective_size()
-                                    .width_twips as f32
-                                    / 15.0))
-                                .clamp(0.25, 2.5);
+                            self.fit_page_width(ctx);
                         }
                     });
+                    ui.horizontal_wrapped(|ui| self.workbench_controls(ui));
                     ui.separator();
                     ui.horizontal_wrapped(|ui| {
                         if ui
@@ -1998,6 +2013,9 @@ impl FolioApp {
         }
     }
     fn keyboard(&mut self, ctx: &egui::Context, layout: &mut DocumentLayout, focused: bool) {
+        if self.workbench_blocks_editing() {
+            return;
+        }
         if !focused {
             self.composition = None;
             self.ime_enabled = false;
@@ -2229,7 +2247,8 @@ impl FolioApp {
                     .inner_margin(24.0),
             )
             .show(ctx, |ui| {
-                if self.pending_recovery.is_some()
+                if self.workbench_blocks_editing()
+                    || self.pending_recovery.is_some()
                     || self.pending.is_some()
                     || self.overwrite.is_some()
                     || self.error.is_some()
@@ -2247,6 +2266,14 @@ impl FolioApp {
                         );
                         let origin = allocated.min + Vec2::new(extra, 0.0);
                         let rect = Rect::from_min_size(origin, layout.size);
+                        if let Some(page) = self.workbench.reveal_page.take()
+                            && let Some(page_rect) = layout.pages.get(page)
+                        {
+                            ui.scroll_to_rect(
+                                page_rect.translate(origin.to_vec2()),
+                                Some(egui::Align::TOP),
+                            );
+                        }
                         let response = ui.interact(rect, id, egui::Sense::click_and_drag());
                         response.widget_info(|| {
                             let value = self
@@ -2677,6 +2704,8 @@ impl eframe::App for FolioApp {
             });
         }
         self.document_info_panel(ctx);
+        self.writing_progress_panel(ctx);
+        self.workbench_windows(ctx);
         self.paint_canvas(ctx, layout);
         self.ai_connection_window(ctx);
         let title = format!(
@@ -2695,6 +2724,15 @@ impl eframe::App for FolioApp {
     }
 }
 fn main() -> eframe::Result {
+    if std::env::args().any(|arg| arg == "--version") {
+        println!(
+            "Folio {} ({})",
+            env!("CARGO_PKG_VERSION"),
+            option_env!("FOLIO_BUILD_REVISION").unwrap_or("development")
+        );
+        return Ok(());
+    }
+
     let arguments: Vec<_> = std::env::args().skip(1).collect();
     if !arguments.is_empty() {
         let result = match arguments.as_slice() {
@@ -2707,7 +2745,7 @@ fn main() -> eframe::Result {
                 )),
             },
             _ => {
-                eprintln!("Usage: folio-desktop [--mcp | --mcp-connect ADDRESS]");
+                eprintln!("Usage: folio-desktop [--version | --mcp | --mcp-connect ADDRESS]");
                 std::process::exit(2);
             }
         };

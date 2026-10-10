@@ -10,6 +10,8 @@ pub enum Icon {
     Commands,
     ReadOnly,
     Templates,
+    ExportText,
+    ExportSelection,
     Recent,
     New,
     Open,
@@ -114,6 +116,20 @@ impl Icon {
                 outline(14., 3., 7., 8.);
                 outline(3., 14., 8., 7.);
                 outline(14., 14., 7., 7.);
+            }
+            Self::ExportText | Self::ExportSelection => {
+                path(&[(14., 3.), (4., 3.), (4., 21.), (14., 21.)]);
+                if matches!(self, Self::ExportSelection) {
+                    outline(7., 8., 7., 8.);
+                    line((9., 11.), (12., 11.));
+                    line((9., 13.), (12., 13.));
+                } else {
+                    line((7., 8.), (13., 8.));
+                    line((7., 12.), (13., 12.));
+                    line((7., 16.), (11., 16.));
+                }
+                line((15., 12.), (22., 12.));
+                path(&[(19., 9.), (22., 12.), (19., 15.)]);
             }
             Self::Commands => {
                 outline(3., 4., 18., 16.);

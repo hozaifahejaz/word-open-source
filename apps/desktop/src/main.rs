@@ -403,6 +403,15 @@ impl FolioApp {
     }
     fn toggle_read_only(&mut self) {
         self.read_only = !self.read_only;
+        // A due checkpoint is consumed during read-only mode. Resume a fresh
+        // idle interval even when the document has not changed since observation.
+        if !self.read_only
+            && self.editor.is_dirty()
+            && self.path.is_some()
+            && self.protected.is_none()
+        {
+            self.autosave_checkpoint.mark_changed(Instant::now());
+        }
         self.composition = None;
         self.ime_enabled = false;
         self.typing = None;
@@ -1684,8 +1693,8 @@ impl FolioApp {
                         }
                     });
                     ui.horizontal_wrapped(|ui| {
-                        for (label, tool) in [("Templates…", workbench::Tool::Templates), ("Duplicate…", workbench::Tool::Duplicate), ("Export text…", workbench::Tool::ExportText), ("Export selection…", workbench::Tool::ExportSelection)] {
-                            if ui.add_enabled(!matches!(tool, workbench::Tool::ExportSelection) || !self.editor.selection().is_collapsed(), IconButton::new(Icon::Copy, label)).clicked() { self.run_tool(tool, ctx); }
+                        for (label, icon, tool) in [("Templates…", Icon::Templates, workbench::Tool::Templates), ("Duplicate…", Icon::Copy, workbench::Tool::Duplicate), ("Export text…", Icon::ExportText, workbench::Tool::ExportText), ("Export selection…", Icon::ExportSelection, workbench::Tool::ExportSelection)] {
+                            if ui.add_enabled(!matches!(tool, workbench::Tool::ExportSelection) || !self.editor.selection().is_collapsed(), IconButton::new(icon, label)).clicked() { self.run_tool(tool, ctx); }
                         }
                     });
                     ui.label("DOCX • A warned import always saves as a converted copy.");
@@ -4226,6 +4235,69 @@ mod app_tests {
             now + std::time::Duration::from_secs(10),
             std::time::Duration::from_secs(2)
         ));
+    }
+    #[test]
+    fn autosave_resumes_after_readonly_deadline_without_another_edit() {
+        let dir = RecoveryDirectory::new();
+        let mut app = dir.app();
+        let ctx = egui::Context::default();
+        let source = lifecycle_file(&dir, "resume.docx");
+        app.open_path(&source).unwrap();
+        let original = std::fs::read(&source).unwrap();
+        app.insert("pending change".into());
+        let now = Instant::now();
+        app.schedule_checkpoints(now);
+        app.toggle_read_only();
+        app.process_checkpoints(now + Duration::from_secs(6), &ctx);
+        assert_eq!(std::fs::read(&source).unwrap(), original);
+        assert!(app.editor.is_dirty());
+        assert!(
+            app.workspace_store
+                .as_ref()
+                .unwrap()
+                .load_recovery()
+                .unwrap()
+                .is_some()
+        );
+        app.toggle_read_only();
+        let resumed = app
+            .autosave_checkpoint
+            .changed_at
+            .expect("resume must rearm autosave");
+        app.schedule_checkpoints(resumed);
+        app.process_checkpoints(resumed + Duration::from_secs(4), &ctx);
+        assert_eq!(std::fs::read(&source).unwrap(), original);
+        assert!(app.editor.is_dirty());
+        app.process_checkpoints(resumed + Duration::from_secs(5), &ctx);
+        assert!(!app.editor.is_dirty());
+        assert_eq!(
+            files::open(&source)
+                .unwrap()
+                .document
+                .paragraph(0)
+                .unwrap()
+                .text(),
+            "pending change"
+        );
+        assert!(
+            app.workspace_store
+                .as_ref()
+                .unwrap()
+                .load_recovery()
+                .unwrap()
+                .is_none()
+        );
+        for named in [false, true] {
+            let mut app = FolioApp::default();
+            app.insert("protected or untitled".into());
+            if named {
+                app.path = Some(source.clone());
+                app.protected = Some(source.clone());
+            }
+            app.toggle_read_only();
+            app.toggle_read_only();
+            assert!(app.autosave_checkpoint.changed_at.is_none());
+        }
     }
     #[test]
     fn autosave_debounce_waits_for_five_seconds_of_idle() {

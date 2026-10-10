@@ -403,9 +403,10 @@ impl FolioApp {
     }
     fn toggle_read_only(&mut self) {
         self.read_only = !self.read_only;
-        // A due checkpoint is consumed during read-only mode. Resume a fresh
-        // idle interval even when the document has not changed since observation.
+        // Resume only a checkpoint armed by editing; recovered documents stay
+        // disarmed until a fresh edit or explicit Save. Start a fresh idle interval.
         if !self.read_only
+            && self.autosave_checkpoint.changed_at.is_some()
             && self.editor.is_dirty()
             && self.path.is_some()
             && self.protected.is_none()
@@ -732,7 +733,8 @@ impl FolioApp {
             && self.editor.is_dirty()
             && self.path.is_some()
             && self.protected.is_none();
-        if self.autosave_checkpoint.is_due(now, Duration::from_secs(5))
+        if !self.read_only
+            && self.autosave_checkpoint.is_due(now, Duration::from_secs(5))
             && self.pending.is_none()
             && self.overwrite.is_none()
         {
@@ -4237,6 +4239,49 @@ mod app_tests {
         ));
     }
     #[test]
+    fn readonly_toggle_does_not_arm_restored_source_before_a_fresh_edit() {
+        let dir = RecoveryDirectory::new();
+        let source = lifecycle_file(&dir, "restored.docx");
+        let original = std::fs::read(&source).unwrap();
+        let mut writer = dir.app();
+        writer.open_path(&source).unwrap();
+        writer.insert("recovered".into());
+        assert!(writer.flush_recovery());
+        let mut app = FolioApp::with_workspace_store(WorkspaceStore::at(dir.0.clone()));
+        assert!(app.restore_startup_recovery());
+        let ctx = egui::Context::default();
+        let now = Instant::now();
+        app.toggle_read_only();
+        app.process_checkpoints(now + Duration::from_secs(6), &ctx);
+        app.toggle_read_only();
+        assert!(app.autosave_checkpoint.changed_at.is_none());
+        app.schedule_checkpoints(now + Duration::from_secs(7));
+        app.process_checkpoints(now + Duration::from_secs(20), &ctx);
+        assert_eq!(std::fs::read(&source).unwrap(), original);
+        assert!(app.editor.is_dirty());
+        assert!(
+            app.workspace_store
+                .as_ref()
+                .unwrap()
+                .load_recovery()
+                .unwrap()
+                .is_some()
+        );
+        app.insert(" fresh".into());
+        app.schedule_checkpoints(now + Duration::from_secs(21));
+        app.process_checkpoints(now + Duration::from_secs(26), &ctx);
+        assert!(!app.editor.is_dirty());
+        assert_eq!(
+            files::open(&source)
+                .unwrap()
+                .document
+                .paragraph(0)
+                .unwrap()
+                .text(),
+            "recovered fresh"
+        );
+    }
+    #[test]
     fn autosave_resumes_after_readonly_deadline_without_another_edit() {
         let dir = RecoveryDirectory::new();
         let mut app = dir.app();
@@ -4297,6 +4342,46 @@ mod app_tests {
             app.toggle_read_only();
             app.toggle_read_only();
             assert!(app.autosave_checkpoint.changed_at.is_none());
+        }
+    }
+    #[test]
+    fn readonly_preserves_armed_autosave_before_deadline_and_with_direct_mode_state() {
+        for direct_mode in [false, true] {
+            let dir = RecoveryDirectory::new();
+            let source = lifecycle_file(&dir, "paused.docx");
+            let mut app = dir.app();
+            app.open_path(&source).unwrap();
+            app.insert("edited".into());
+            let ctx = egui::Context::default();
+            let now = Instant::now();
+            app.schedule_checkpoints(now);
+            if direct_mode {
+                app.read_only = true;
+            } else {
+                app.toggle_read_only();
+            }
+            app.process_checkpoints(now + Duration::from_secs(2), &ctx);
+            assert_eq!(app.autosave_checkpoint.changed_at, Some(now));
+            if direct_mode {
+                app.process_checkpoints(now + Duration::from_secs(6), &ctx);
+                assert_eq!(app.autosave_checkpoint.changed_at, Some(now));
+                app.read_only = false;
+                app.process_checkpoints(now + Duration::from_secs(7), &ctx);
+            } else {
+                app.toggle_read_only();
+                let resumed = app.autosave_checkpoint.changed_at.unwrap();
+                app.process_checkpoints(resumed + Duration::from_secs(5), &ctx);
+            }
+            assert!(!app.editor.is_dirty());
+            assert_eq!(
+                files::open(&source)
+                    .unwrap()
+                    .document
+                    .paragraph(0)
+                    .unwrap()
+                    .text(),
+                "edited"
+            );
         }
     }
     #[test]

@@ -124,8 +124,8 @@ Real egui checks toggle both options, change the focused query, click a result
 and request canvas reveal, wrap Find next, reject a selected substring excluded
 by Whole words, replace a reversed uppercase match, refresh after Replace all,
 and preserve the protected-source path. Existing workspace/source-protection
-regressions pass in the full suite. MCP continues using the original literal
-case-sensitive command. Regex search is deferred.
+regressions pass in the full suite. At this increment MCP used the original literal case-sensitive command; the
+later MCP parity increment exposes the same options with compatible defaults. Regex search is deferred.
 
 An initial full test run passed with one test-helper `unused_must_use` warning;
 the initial clippy run rejected that warning. Explicitly consuming the egui pass
@@ -399,3 +399,22 @@ Automated lifecycle regressions use only temporary files and verify model/histor
 preservation, aliases/overwrite/failure guards, drop dispatch, recovery and
 read-only accessibility state. Native OS drag-and-drop and screen-reader speech
 remain manual release checks.
+
+## MCP editing parity
+
+The 19 local MCP tools include Unicode case and whole-word search controls,
+structure-preserving case conversion, full text and paragraph formatting, complete
+page-layout read/edit, template discovery/new documents, distinct DOCX copies and
+UTF-8 text export. RGB highlight omission preserves it and explicit null clears it;
+nested input fields are strict. Read-only and interaction dialogs protect mutation
+routes, with navigation/read/export available in read-only mode. Background SDK
+smoke uses disposable temporary DOCX/TXT files and verifies saved formatting on
+reopen; the live smoke only inserts, finds and undoes text in a blank test window.
+
+Task 5 verification (2026-10-10): `sh scripts/validate-local.sh` passes formatting,
+196 workspace tests (35 core commands, 6 recovery, 129 desktop, 26 DOCX), clippy
+with warnings denied, and unsigned macOS packaging. One manual cold-layout
+benchmark remains intentionally ignored. Official Python MCP SDK 2.3.0 background
+smoke passes against the fresh packaged executable, including DOCX formatting
+save/reopen. Live-window/native release smoke remains a separate release check;
+no user documents were exported or sent during this pass.

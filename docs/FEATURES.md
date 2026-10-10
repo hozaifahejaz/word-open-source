@@ -47,10 +47,10 @@ and build; published help scopes are recorded below without invented build numbe
 | Page settings/breaks | Supported | One size/orientation/margin set and explicit breaks; automatic/explicit pagination implemented | Desktop/web; ECMA Part 1 |
 | Local workspace | Supported | File-tab Recent Documents (12 unique paths), unavailable-entry removal, per-document caret, remembered light/dark appearance and zoom | [Acceptance evidence](ACCEPTANCE.md) |
 | Auto-save/recovery | Supported | Named unprotected DOCX files auto-save after five idle seconds; dirty recovery checkpoints after two seconds; explicit startup Restore/Discard retains import guards | [Acceptance evidence](ACCEPTANCE.md) |
-| Advanced workspace | Deferred | Tabs/windows, templates/gallery, duplication/rename, drag/drop, read-only/password protection, version history and comparison | Approved feature roadmap |
+| Advanced workspace | Partial | Original template gallery, distinct DOCX copies, UTF-8 text export, single-DOCX drag/drop and read-only editing mode; tabs/windows, rename, password protection, version history and comparison deferred | Approved feature roadmap |
 | DOCX | Partial | Supported semantic subset import/export; inherited styles flattened; omissions/approximations warn | ECMA Parts 1–4; MS-DOCX |
 | Tables/images | Deferred | No model/rendering; imports must warn | Create document; ECMA Part 1 |
-| Styles/templates | Partial | Inherited named styles resolved on import and flattened; no named-style editor/templates | Web service; WordprocessingML |
+| Styles/templates | Partial | Inherited named styles resolved on import and flattened; original Blank/Letter/Meeting Notes/Project Brief document templates; named-style editor and Word template codecs deferred | Web service; WordprocessingML |
 | Lists | Deferred | No bullets, numbering definitions/hierarchy | Web service; ECMA Part 1 |
 | Sections/columns | Partial | Single layout only; mixed sections/columns absent | Desktop/web; ECMA Part 1 |
 | Headers/footers | Deferred | No repeating stories/page-number evaluation | WordprocessingML |
@@ -61,7 +61,7 @@ and build; published help scopes are recorded below without invented build numbe
 | Mail merge | Deferred | No data sources, merge fields, envelopes/labels | Desktop/web; ECMA Part 1 |
 | Printing/PDF | Deferred | No print pipeline or PDF export | Desktop/web |
 | Accessibility | Partial | eframe backend enabled; custom editing semantics/screen-reader checks/audit pending | Desktop/web |
-| Automation/add-ins | Partial | 14 MCP tools for live/background documents; no VBA/macros/Office add-ins execution | [MCP setup](MCP.md); Desktop/web |
+| Automation/add-ins | Partial | 19 MCP tools for live/background documents; no VBA/macros/Office add-ins execution | [MCP setup](MCP.md); Desktop/web |
 | Legacy/other formats | Deferred | No .doc, .docm, .dot/.dotx, RTF or ODT codec | MS-DOC; ECMA |
 | Cloud/AI | Deferred | No OneDrive/accounts, online services, dictation or AI assistant | Create document; Mobile Copilot |
 | Browser/mobile | Deferred | Windows/macOS/Linux native first; web/iOS/Android front ends later | Web service; Mobile Copilot |
@@ -91,8 +91,8 @@ multiplication/division, four arrows, check mark, grinning face and red heart
 (including its emoji variation selector). Insertion replaces the current selection
 or inserts at the caret, closes the picker and returns focus to the document.
 These are literal characters, including the bullet; they do not implement list
-formatting. Date/time insertion, custom replacements and emoji search remain
-**Deferred**. Native screen-reader and glyph-rendering limitations remain as
+formatting. Date/time insertion is available through the writing workbench.
+Custom replacements and emoji search remain **Deferred**. Native screen-reader and glyph-rendering limitations remain as
 recorded in [acceptance evidence](ACCEPTANCE.md).
 
 ## Search increment — 2026-10-10
@@ -113,8 +113,8 @@ Insensitive matching compares Unicode scalar lowercase mappings and maps results
 back to original grapheme boundaries, including lowercase expansions. It does not
 perform locale-specific case folding or Unicode normalization. Whole words uses
 UAX #29 boundaries in the original paragraph. Paragraph/page breaks remain search
-barriers. Existing core `Document::find`, `Command::ReplaceAll`, and MCP replacement
-retain literal case-sensitive behavior. Regex search remains **Deferred**.
+barriers. Existing core `Document::find`, `Command::ReplaceAll`, and omitted MCP search
+options retain literal case-sensitive behavior. Regex search remains **Deferred**.
 
 ## Workspace/recovery increment — 2026-10-10
 
@@ -191,3 +191,14 @@ mode. Auto-save pauses; recovery still checkpoints preexisting unsaved edits.
 Save/Save changes uses Save As; a distinct destination is allowed and overwriting
 the active source or an alias is blocked. Successful New/Open/template resets the
 mode. This is an editing mode, with no encryption or filesystem permission claim.
+
+## MCP editing parity
+
+The 19 local MCP tools include Unicode case and whole-word search controls,
+structure-preserving case conversion, full text and paragraph formatting, complete
+page-layout read/edit, template discovery/new documents, distinct DOCX copies and
+UTF-8 text export. RGB highlight omission preserves it and explicit null clears it;
+nested input fields are strict. Read-only and interaction dialogs protect mutation
+routes, with navigation/read/export available in read-only mode. Background SDK
+smoke uses disposable temporary DOCX/TXT files and verifies saved formatting on
+reopen; the live smoke only inserts, finds and undoes text in a blank test window.

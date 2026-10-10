@@ -42,10 +42,65 @@ pub fn tools() -> Vec<Value> {
     );
     let boolean = json!({"type":"boolean"});
     let string = json!({"type":"string"});
+    let rgb = object(
+        json!({"red":{"type":"integer","minimum":0,"maximum":255},"green":{"type":"integer","minimum":0,"maximum":255},"blue":{"type":"integer","minimum":0,"maximum":255}}),
+        &["red", "green", "blue"],
+    );
+    let line_spacing = json!({"oneOf":[
+        object(json!({"kind":{"type":"string","const":"multiple"},"value":{"type":"integer","minimum":1,"maximum":65535}}), &["kind","value"]),
+        object(json!({"kind":{"type":"string","enum":["exact","at_least"]},"value":{"type":"integer","minimum":1,"maximum":4294967295_u64}}), &["kind","value"])
+    ]});
+    let distance = json!({"type":"integer","minimum":0,"maximum":4294967295_u64});
+    let dimension = json!({"type":"integer","minimum":1,"maximum":4294967295_u64});
+    let layout = object(
+        json!({"size":object(json!({"width_twips":dimension,"height_twips":dimension}), &["width_twips","height_twips"]),"orientation":{"type":"string","enum":["portrait","landscape"]},"margins":object(json!({"top":distance,"right":distance,"bottom":distance,"left":distance}), &["top","right","bottom","left"])}),
+        &["size", "orientation", "margins"],
+    );
+    let match_case = json!({"type":"boolean","default":true});
+    let whole_words = json!({"type":"boolean","default":false});
     let definitions = vec![
         (
+            "folio_convert_case",
+            "Convert a nonempty selection using locale-independent Unicode upper/lower/title/sentence casing, preserving runs and paragraph structure. Title uses whitespace-delimited tokens; sentence starts follow punctuation and whitespace.",
+            object(
+                json!({"selection":selection,"case":{"type":"string","enum":["upper","lower","title","sentence"]}}),
+                &["selection", "case"],
+            ),
+            false,
+        ),
+        (
+            "folio_set_page_layout",
+            "Set complete page layout. Nominal dimensions and margins are twips (1440 per inch); landscape swaps effective dimensions. Margins must leave positive content area.",
+            object(json!({"layout":layout}), &["layout"]),
+            false,
+        ),
+        (
+            "folio_list_templates",
+            "List stable document template IDs, names and descriptions.",
+            object(json!({}), &[]),
+            true,
+        ),
+        (
+            "folio_duplicate_document",
+            "Save a distinct absolute DOCX copy without changing the active document, history or path. Existing destinations require overwrite=true; source aliases remain protected.",
+            object(
+                json!({"path":string,"overwrite":{"type":"boolean","default":false}}),
+                &["path"],
+            ),
+            false,
+        ),
+        (
+            "folio_export_text",
+            "Export the document or optional selection to a distinct absolute UTF-8 .txt path without changing editor state. Paragraphs use newlines; page breaks use form feeds. Existing destinations require overwrite=true.",
+            object(
+                json!({"path":string,"selection":selection,"overwrite":{"type":"boolean","default":false}}),
+                &["path"],
+            ),
+            false,
+        ),
+        (
             "folio_get_document",
-            "Read document blocks, rich text styles, statistics, file path and dirty state.",
+            "Read indexed blocks with complete run/default and paragraph styles, full page_layout, read_only, statistics, file path and dirty state.",
             object(json!({}), &[]),
             true,
         ),
@@ -72,33 +127,36 @@ pub fn tools() -> Vec<Value> {
         ),
         (
             "folio_format_text",
-            "Format an explicit nonempty selection; font sizes are half-points (24 = 12pt).",
+            "Patch an explicit nonempty selection. Font sizes are half-points (24 = 12pt); RGB channels are 0..255. Omitted highlight preserves it; highlight:null clears it. Vertical alignment is baseline/superscript/subscript.",
             object(
-                json!({"selection":selection,"bold":boolean,"italic":boolean,"underline":boolean,"font_family":string,"size_half_points":{"type":"integer","minimum":1,"maximum":65535}}),
+                json!({"selection":selection,"bold":boolean,"italic":boolean,"underline":boolean,"font_family":string,"size_half_points":{"type":"integer","minimum":1,"maximum":65535},"strikethrough":boolean,"vertical_align":{"type":"string","enum":["baseline","superscript","subscript"]},"color":rgb,"highlight":{"anyOf":[rgb,{"type":"null"}]}}),
                 &["selection"],
             ),
             false,
         ),
         (
             "folio_format_paragraph",
-            "Set paragraph alignment for an explicit selection.",
+            "Patch paragraph alignment and spacing. Before/after use nonnegative twips; line spacing uses positive percentages for multiple, positive twips for exact/at_least.",
             object(
-                json!({"selection":selection,"alignment":{"type":"string","enum":["left","center","right","justify"]}}),
-                &["selection", "alignment"],
+                json!({"selection":selection,"alignment":{"type":"string","enum":["left","center","right","justify"]},"space_before_twips":distance,"space_after_twips":distance,"line_spacing":line_spacing}),
+                &["selection"],
             ),
             false,
         ),
         (
             "folio_find",
-            "Find literal, case-sensitive text within paragraphs; return selection ranges.",
-            object(json!({"text":string}), &["text"]),
+            "Find literal paragraph-local text at grapheme boundaries. match_case defaults true; whole_words defaults false and uses Unicode word boundaries.",
+            object(
+                json!({"text":string,"match_case":match_case,"whole_words":whole_words}),
+                &["text"],
+            ),
             true,
         ),
         (
             "folio_replace_all",
-            "Replace all literal matches as one undoable edit.",
+            "Replace paragraph-local literal matches as one undoable edit. match_case defaults true; whole_words defaults false. Replacement newlines create paragraphs.",
             object(
-                json!({"text":string,"replacement":string}),
+                json!({"text":string,"replacement":string,"match_case":match_case,"whole_words":whole_words}),
                 &["text", "replacement"],
             ),
             false,
@@ -123,8 +181,11 @@ pub fn tools() -> Vec<Value> {
         ),
         (
             "folio_new_document",
-            "Start a blank document. Refuses unsaved changes unless discard_unsaved is explicitly true.",
-            object(json!({"discard_unsaved":boolean}), &[]),
+            "Start a blank document or named template. Nonblank templates start unsaved. Refuses dirty content unless discard_unsaved=true; successful switch leaves read-only mode.",
+            object(
+                json!({"discard_unsaved":boolean,"template":{"type":"string","enum":["blank","letter","meeting_notes","project_brief"]}}),
+                &[],
+            ),
             false,
         ),
         (
@@ -135,7 +196,7 @@ pub fn tools() -> Vec<Value> {
         ),
         (
             "folio_save_document",
-            "Atomically save to an absolute DOCX path. Existing files require overwrite=true. Warned import sources remain protected.",
+            "Atomically save to an absolute DOCX path. Existing files require overwrite=true. Warned import sources remain protected; read-only mode requires a distinct destination.",
             object(json!({"path":string,"overwrite":boolean}), &["path"]),
             false,
         ),
@@ -179,38 +240,69 @@ struct Select {
 struct Replace {
     selection: Range,
     text: String,
+    #[serde(default, deserialize_with = "present_value")]
     expected_text: Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Format {
     selection: Range,
+    #[serde(default, deserialize_with = "present_value")]
     bold: Option<bool>,
+    #[serde(default, deserialize_with = "present_value")]
     italic: Option<bool>,
+    #[serde(default, deserialize_with = "present_value")]
     underline: Option<bool>,
+    #[serde(default, deserialize_with = "present_value")]
     font_family: Option<String>,
+    #[serde(default, deserialize_with = "present_value")]
     size_half_points: Option<u16>,
+    #[serde(default, deserialize_with = "present_value")]
+    strikethrough: Option<bool>,
+    #[serde(default, deserialize_with = "present_value")]
+    vertical_align: Option<VerticalAlign>,
+    #[serde(default, deserialize_with = "present_value")]
+    color: Option<RgbInput>,
+    #[serde(default, deserialize_with = "present_nullable_rgb")]
+    highlight: Option<Option<RgbInput>>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ParagraphFormat {
     selection: Range,
-    alignment: String,
+    #[serde(default, deserialize_with = "present_value")]
+    alignment: Option<String>,
+    #[serde(default, deserialize_with = "present_value")]
+    space_before_twips: Option<u32>,
+    #[serde(default, deserialize_with = "present_value")]
+    space_after_twips: Option<u32>,
+    #[serde(default, deserialize_with = "present_value")]
+    line_spacing: Option<LineSpacingInput>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Search {
     text: String,
+    #[serde(default = "default_true")]
+    match_case: bool,
+    #[serde(default)]
+    whole_words: bool,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ReplaceAll {
     text: String,
     replacement: String,
+    #[serde(default = "default_true")]
+    match_case: bool,
+    #[serde(default)]
+    whole_words: bool,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct New {
+    #[serde(default, deserialize_with = "present_value")]
+    template: Option<String>,
     #[serde(default)]
     discard_unsaved: bool,
 }
@@ -229,6 +321,126 @@ struct Save {
     overwrite: bool,
 }
 
+// Optional fields reject explicit null unless the public schema permits it.
+fn present_value<'de, T: Deserialize<'de>, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<T>, D::Error> {
+    T::deserialize(d).map(Some)
+}
+fn default_true() -> bool {
+    true
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RgbInput {
+    red: u8,
+    green: u8,
+    blue: u8,
+}
+impl From<RgbInput> for Color {
+    fn from(v: RgbInput) -> Self {
+        Self::rgb(v.red, v.green, v.blue)
+    }
+}
+fn present_nullable_rgb<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<Option<RgbInput>>, D::Error> {
+    Option::<RgbInput>::deserialize(d).map(Some)
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LineSpacingInput {
+    kind: String,
+    value: u32,
+}
+impl LineSpacingInput {
+    fn spacing(self) -> Result<LineSpacing, String> {
+        if self.value == 0 {
+            return Err("Line spacing must be positive".into());
+        }
+        match self.kind.as_str() {
+            "multiple" => u16::try_from(self.value)
+                .map(LineSpacing::Multiple)
+                .map_err(|_| "Multiple spacing must be 1..65535 percent".into()),
+            "exact" => Ok(LineSpacing::Exact(self.value)),
+            "at_least" => Ok(LineSpacing::AtLeast(self.value)),
+            _ => Err("Unknown line spacing kind".into()),
+        }
+    }
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CaseInput {
+    selection: Range,
+    case: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SizeInput {
+    width_twips: u32,
+    height_twips: u32,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MarginsInput {
+    top: u32,
+    right: u32,
+    bottom: u32,
+    left: u32,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LayoutInput {
+    size: SizeInput,
+    orientation: String,
+    margins: MarginsInput,
+}
+impl LayoutInput {
+    fn layout(self) -> Result<PageLayout, String> {
+        Ok(PageLayout {
+            size: PageSize {
+                width_twips: self.size.width_twips,
+                height_twips: self.size.height_twips,
+            },
+            orientation: match self.orientation.as_str() {
+                "portrait" => Orientation::Portrait,
+                "landscape" => Orientation::Landscape,
+                _ => return Err("Unknown orientation".into()),
+            },
+            margins: Margins {
+                top: self.margins.top,
+                right: self.margins.right,
+                bottom: self.margins.bottom,
+                left: self.margins.left,
+            },
+        })
+    }
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PageInput {
+    layout: LayoutInput,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExportInput {
+    path: PathBuf,
+    #[serde(default, deserialize_with = "present_value")]
+    selection: Option<Range>,
+    #[serde(default)]
+    overwrite: bool,
+}
+fn paragraph_style(s: &ParagraphStyle) -> Value {
+    let (kind, value) = match s.line_spacing {
+        LineSpacing::Multiple(v) => ("multiple", u32::from(v)),
+        LineSpacing::Exact(v) => ("exact", v),
+        LineSpacing::AtLeast(v) => ("at_least", v),
+    };
+    json!({"alignment":format!("{:?}",s.alignment).to_lowercase(),"space_before_twips":s.space_before_twips,"space_after_twips":s.space_after_twips,"line_spacing":{"kind":kind,"value":value}})
+}
+fn page_layout(p: &PageLayout) -> Value {
+    json!({"size":p.size,"orientation":format!("{:?}",p.orientation).to_lowercase(),"margins":p.margins})
+}
 fn args<T: DeserializeOwned>(value: Value) -> Result<T, String> {
     serde_json::from_value(value).map_err(|e| format!("Invalid arguments: {e}"))
 }
@@ -236,15 +448,15 @@ fn range(selection: Selection) -> Value {
     json!({"anchor":{"block":selection.anchor.block,"offset":selection.anchor.offset},"focus":{"block":selection.focus.block,"offset":selection.focus.offset}})
 }
 fn style(s: &TextStyle) -> Value {
-    json!({"bold":s.bold,"italic":s.italic,"underline":s.underline,"font_family":s.font_family,"size_half_points":s.size_half_points,"color":{"red":s.color.red,"green":s.color.green,"blue":s.color.blue}})
+    json!({"bold":s.bold,"italic":s.italic,"underline":s.underline,"strikethrough":s.strikethrough,"vertical_align":s.vertical_align,"highlight":s.highlight,"font_family":s.font_family,"size_half_points":s.size_half_points,"color":{"red":s.color.red,"green":s.color.green,"blue":s.color.blue}})
 }
 fn document(app: &FolioApp) -> Value {
     let blocks: Vec<_> = app.editor.document().blocks.iter().enumerate().map(|(index, b)| match b {
         Block::PageBreak => json!({"index":index,"type":"page_break"}),
-        Block::Paragraph(p) => json!({"index":index,"type":"paragraph","text":p.text(),"byte_length":p.len_bytes(),"alignment":format!("{:?}",p.style.alignment).to_lowercase(),"default_style":style(&p.default_style),"runs":p.runs.iter().map(|r|json!({"text":r.text,"style":style(&r.style)})).collect::<Vec<_>>()})
+        Block::Paragraph(p) => json!({"index":index,"type":"paragraph","text":p.text(),"byte_length":p.len_bytes(),"alignment":format!("{:?}",p.style.alignment).to_lowercase(),"style":paragraph_style(&p.style),"default_style":style(&p.default_style),"runs":p.runs.iter().map(|r|json!({"text":r.text,"style":style(&r.style)})).collect::<Vec<_>>()})
     }).collect();
     let stats = editing::document_statistics(app.editor.document());
-    json!({"blocks":blocks,"selection":range(app.editor.selection()),"path":app.path.as_ref().map(|p|p.to_string_lossy()),"dirty":app.editor.is_dirty(),"can_undo":app.editor.can_undo(),"can_redo":app.editor.can_redo(),"statistics":{"words":stats.words,"characters":stats.characters},"warnings":app.warnings.iter().map(|w|&w.message).collect::<Vec<_>>()})
+    json!({"blocks":blocks,"page_layout":page_layout(&app.editor.document().page_layout),"read_only":app.read_only,"selection":range(app.editor.selection()),"path":app.path.as_ref().map(|p|p.to_string_lossy()),"dirty":app.editor.is_dirty(),"can_undo":app.editor.can_undo(),"can_redo":app.editor.can_redo(),"statistics":{"words":stats.words,"characters":stats.characters},"warnings":app.warnings.iter().map(|w|&w.message).collect::<Vec<_>>()})
 }
 fn check_path(path: &std::path::Path) -> Result<(), String> {
     if !path.is_absolute()
@@ -264,10 +476,62 @@ fn check_unsaved(app: &FolioApp, discard: bool) -> Result<(), String> {
 }
 
 pub fn call(app: &mut FolioApp, name: &str, arguments: Value) -> Result<Value, String> {
-    if app.pending.is_some() || app.overwrite.is_some() || app.error.is_some() {
+    if app.pending_recovery.is_some()
+        || app.pending.is_some()
+        || app.overwrite.is_some()
+        || app.error.is_some()
+    {
         return Err("Resolve the open Folio dialog before using MCP tools".into());
     }
+    let reads = matches!(
+        name,
+        "folio_get_document" | "folio_get_selection" | "folio_find" | "folio_list_templates"
+    );
+    if !reads && (app.workbench_blocks_editing() || app.template_gallery) {
+        return Err("Resolve the open Folio workbench dialog before using this MCP tool".into());
+    }
     let command = match name {
+        "folio_list_templates" => {
+            let _: Empty = args(arguments)?;
+            return Ok(
+                json!({"templates":crate::templates::CATALOG.iter().map(|&(_,id,name,description)|json!({"id":id,"name":name,"description":description})).collect::<Vec<_>>()}),
+            );
+        }
+        "folio_convert_case" => {
+            let a: CaseInput = args(arguments)?;
+            let case = match a.case.as_str() {
+                "upper" => TextCase::Upper,
+                "lower" => TextCase::Lower,
+                "title" => TextCase::Title,
+                "sentence" => TextCase::Sentence,
+                _ => return Err("Unknown case".into()),
+            };
+            let selection = a.selection.selection();
+            if selection.is_collapsed() {
+                return Err("Select text to convert case".into());
+            }
+            Command::ConvertCase { selection, case }
+        }
+        "folio_set_page_layout" => {
+            let a: PageInput = args(arguments)?;
+            Command::SetPageLayout {
+                layout: a.layout.layout()?,
+            }
+        }
+        "folio_duplicate_document" => {
+            let a: Save = args(arguments)?;
+            app.duplicate_to(a.path.clone(), a.overwrite)?;
+            return Ok(json!({"duplicated":true,"path":a.path}));
+        }
+        "folio_export_text" => {
+            let a: ExportInput = args(arguments)?;
+            app.export_text_to(
+                a.path.clone(),
+                a.selection.map(Range::selection),
+                a.overwrite,
+            )?;
+            return Ok(json!({"exported":true,"path":a.path}));
+        }
         "folio_get_document" => {
             let _: Empty = args(arguments)?;
             return Ok(document(app));
@@ -283,7 +547,13 @@ pub fn call(app: &mut FolioApp, name: &str, arguments: Value) -> Result<Value, S
             return app
                 .editor
                 .document()
-                .find(&a.text)
+                .find_with_options(
+                    &a.text,
+                    SearchOptions {
+                        match_case: a.match_case,
+                        whole_words: a.whole_words,
+                    },
+                )
                 .map(
                     |matches| json!({"matches":matches.into_iter().map(range).collect::<Vec<_>>()}),
                 )
@@ -327,32 +597,44 @@ pub fn call(app: &mut FolioApp, name: &str, arguments: Value) -> Result<Value, S
                     underline: a.underline,
                     font_family: a.font_family,
                     size_half_points: a.size_half_points,
-                    ..Default::default()
+                    strikethrough: a.strikethrough,
+                    vertical_align: a.vertical_align,
+                    color: a.color.map(Color::from),
+                    highlight: a.highlight.map(|v| v.map(Color::from)),
                 },
             }
         }
         "folio_format_paragraph" => {
             let a: ParagraphFormat = args(arguments)?;
-            let alignment = match a.alignment.as_str() {
-                "left" => Alignment::Left,
-                "center" => Alignment::Center,
-                "right" => Alignment::Right,
-                "justify" => Alignment::Justify,
-                _ => return Err("Unknown alignment".into()),
-            };
+            let alignment = a
+                .alignment
+                .map(|v| match v.as_str() {
+                    "left" => Ok(Alignment::Left),
+                    "center" => Ok(Alignment::Center),
+                    "right" => Ok(Alignment::Right),
+                    "justify" => Ok(Alignment::Justify),
+                    _ => Err("Unknown alignment".to_string()),
+                })
+                .transpose()?;
             Command::FormatParagraphs {
                 selection: a.selection.selection(),
                 patch: ParagraphPatch {
-                    alignment: Some(alignment),
-                    ..Default::default()
+                    alignment,
+                    space_before_twips: a.space_before_twips,
+                    space_after_twips: a.space_after_twips,
+                    line_spacing: a.line_spacing.map(LineSpacingInput::spacing).transpose()?,
                 },
             }
         }
         "folio_replace_all" => {
             let a: ReplaceAll = args(arguments)?;
-            Command::ReplaceAll {
+            Command::ReplaceAllWithOptions {
                 needle: a.text,
                 replacement: a.replacement,
+                options: SearchOptions {
+                    match_case: a.match_case,
+                    whole_words: a.whole_words,
+                },
             }
         }
         "folio_insert_page_break" => {
@@ -372,7 +654,15 @@ pub fn call(app: &mut FolioApp, name: &str, arguments: Value) -> Result<Value, S
         "folio_new_document" => {
             let a: New = args(arguments)?;
             check_unsaved(app, a.discard_unsaved)?;
-            app.new_document()?;
+            let id = match a.template {
+                None => crate::templates::TemplateId::Blank,
+                Some(id) => crate::templates::CATALOG
+                    .iter()
+                    .find(|entry| entry.1 == id)
+                    .map(|entry| entry.0)
+                    .ok_or("Unknown template")?,
+            };
+            app.template_document(id)?;
             reset_edit_state(app);
             return Ok(document(app));
         }
@@ -744,6 +1034,383 @@ mod tests {
         json!({"anchor":{"block":0,"offset":a},"focus":{"block":0,"offset":b}})
     }
     #[test]
+    fn parity_schema_styles_options_case_and_layout() {
+        assert_eq!(tools().len(), 19);
+        let mut app = FolioApp::default();
+        call(
+            &mut app,
+            "folio_replace_text",
+            json!({"selection":selection(0,0),"text":"Straße CAT cat cats"}),
+        )
+        .unwrap();
+        assert_eq!(
+            call(&mut app, "folio_find", json!({"text":"cat"})).unwrap()["matches"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            call(
+                &mut app,
+                "folio_find",
+                json!({"text":"cat","match_case":false,"whole_words":true})
+            )
+            .unwrap()["matches"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        call(&mut app,"folio_format_text",json!({"selection":selection(0,7),"color":{"red":1,"green":2,"blue":3},"highlight":{"red":255,"green":255,"blue":0},"strikethrough":true,"vertical_align":"superscript"})).unwrap();
+        let applied = &app.editor.document().paragraph(0).unwrap().runs[0].style;
+        assert_eq!(applied.color, Color::rgb(1, 2, 3));
+        assert!(applied.strikethrough);
+        assert_eq!(applied.vertical_align, VerticalAlign::Superscript);
+        assert_eq!(applied.highlight, Some(Color::rgb(255, 255, 0)));
+        let before = app.editor.document().clone();
+        call(
+            &mut app,
+            "folio_convert_case",
+            json!({"selection":selection(0,7),"case":"upper"}),
+        )
+        .unwrap();
+        assert_eq!(
+            app.editor.document().paragraph(0).unwrap().runs[0].text,
+            "STRASSE"
+        );
+        call(&mut app, "folio_undo", json!({})).unwrap();
+        assert_eq!(app.editor.document(), &before);
+        call(
+            &mut app,
+            "folio_format_text",
+            json!({"selection":selection(0,7),"italic":true}),
+        )
+        .unwrap();
+        assert!(
+            app.editor.document().paragraph(0).unwrap().runs[0]
+                .style
+                .highlight
+                .is_some()
+        );
+        call(
+            &mut app,
+            "folio_format_text",
+            json!({"selection":selection(0,7),"highlight":null}),
+        )
+        .unwrap();
+        assert!(
+            app.editor.document().paragraph(0).unwrap().runs[0]
+                .style
+                .highlight
+                .is_none()
+        );
+        for (kind, value) in [("multiple", 150), ("exact", 320), ("at_least", 400)] {
+            call(&mut app,"folio_format_paragraph",json!({"selection":selection(0,0),"space_before_twips":120,"space_after_twips":240,"line_spacing":{"kind":kind,"value":value}})).unwrap();
+            assert_eq!(
+                document(&app)["blocks"][0]["style"]["line_spacing"],
+                json!({"kind":kind,"value":value})
+            );
+        }
+        let layout = json!({"size":{"width_twips":12240,"height_twips":15840},"orientation":"landscape","margins":{"top":720,"right":720,"bottom":720,"left":720}});
+        call(&mut app, "folio_set_page_layout", json!({"layout":layout})).unwrap();
+        assert_eq!(document(&app)["page_layout"], layout);
+        let wire = document(&app);
+        assert_eq!(
+            wire["blocks"][0]["runs"][0]["style"]["vertical_align"],
+            "superscript"
+        );
+        assert_eq!(wire["read_only"], false);
+    }
+    #[test]
+    fn parity_invalid_inputs_are_transactional_and_nested_strict() {
+        let mut app = FolioApp::default();
+        call(
+            &mut app,
+            "folio_replace_text",
+            json!({"selection":selection(0,0),"text":"Keep"}),
+        )
+        .unwrap();
+        for (name, input) in [
+            (
+                "folio_format_text",
+                json!({"selection":selection(0,4),"color":null}),
+            ),
+            (
+                "folio_format_paragraph",
+                json!({"selection":selection(0,0),"alignment":null}),
+            ),
+            (
+                "folio_export_text",
+                json!({"path":"/tmp/unused.txt","selection":null}),
+            ),
+            (
+                "folio_format_text",
+                json!({"selection":selection(0,4),"color":{"red":1,"green":2,"blue":3,"extra":true}}),
+            ),
+            (
+                "folio_format_text",
+                json!({"selection":selection(0,4),"highlight":{"red":256,"green":0,"blue":0}}),
+            ),
+            (
+                "folio_format_text",
+                json!({"selection":selection(0,4),"vertical_align":"over"}),
+            ),
+            (
+                "folio_format_paragraph",
+                json!({"selection":selection(0,0),"line_spacing":{"kind":"multiple","value":65536}}),
+            ),
+            (
+                "folio_format_paragraph",
+                json!({"selection":selection(0,0),"line_spacing":{"kind":"exact","value":0}}),
+            ),
+            (
+                "folio_format_paragraph",
+                json!({"selection":selection(0,0),"line_spacing":{"kind":"exact","value":10,"extra":true}}),
+            ),
+            (
+                "folio_set_page_layout",
+                json!({"layout":{"size":{"width_twips":1,"height_twips":2},"orientation":"portrait","margins":{"top":0,"right":1,"bottom":0,"left":1}}}),
+            ),
+            (
+                "folio_new_document",
+                json!({"template":"unknown","discard_unsaved":true}),
+            ),
+        ] {
+            let before = document(&app);
+            app.typing = Some(TextStyle::default());
+            assert!(call(&mut app, name, input).is_err(), "{name}");
+            assert_eq!(document(&app), before, "{name}");
+            assert!(app.typing.is_some());
+        }
+        call(&mut app, "folio_undo", json!({})).unwrap();
+        assert_eq!(app.editor.document(), &Document::default());
+    }
+    #[test]
+    fn parity_lifecycle_readonly_and_modal_guards() {
+        let mut app = FolioApp::default();
+        assert_eq!(
+            call(&mut app, "folio_list_templates", json!({})).unwrap()["templates"]
+                .as_array()
+                .unwrap()
+                .len(),
+            4
+        );
+        app.read_only = true;
+        call(
+            &mut app,
+            "folio_select",
+            json!({"selection":selection(0,0)}),
+        )
+        .unwrap();
+        assert!(call(&mut app, "folio_undo", json!({})).is_err());
+        app.workbench.palette = true;
+        assert!(call(&mut app, "folio_new_document", json!({})).is_err());
+        assert!(
+            call(
+                &mut app,
+                "folio_select",
+                json!({"selection":selection(0,0)})
+            )
+            .is_err()
+        );
+        assert!(call(&mut app, "folio_get_document", json!({})).is_ok());
+        app.workbench.palette = false;
+        call(&mut app, "folio_new_document", json!({"template":"letter"})).unwrap();
+        assert!(app.editor.is_dirty());
+        assert!(!app.read_only);
+        call(
+            &mut app,
+            "folio_new_document",
+            json!({"discard_unsaved":true}),
+        )
+        .unwrap();
+        assert!(!app.editor.is_dirty());
+    }
+    #[test]
+    fn parity_copy_export_readonly_save_preserve_state_and_protect_source() {
+        let dir = std::env::temp_dir().join(format!(
+            "folio-mcp-parity-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        struct OwnedDir(PathBuf);
+        impl Drop for OwnedDir {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _owned = OwnedDir(dir.clone());
+        let source = dir.join("source.docx");
+        let copy = dir.join("copy.docx");
+        let text = dir.join("out.txt");
+        let mut app = FolioApp::default();
+        call(
+            &mut app,
+            "folio_replace_text",
+            json!({"selection":selection(0,0),"text":"Café\nNext"}),
+        )
+        .unwrap();
+        call(&mut app, "folio_save_document", json!({"path":source})).unwrap();
+        app.read_only = true;
+        let before = document(&app);
+        call(&mut app, "folio_duplicate_document", json!({"path":copy})).unwrap();
+        call(
+            &mut app,
+            "folio_export_text",
+            json!({"path":text,"selection":selection(5,0)}),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(&text).unwrap(), "Café");
+        assert_eq!(document(&app), before);
+        assert!(call(&mut app, "folio_duplicate_document", json!({"path":copy})).is_err());
+        assert!(call(&mut app, "folio_export_text", json!({"path":text})).is_err());
+        call(
+            &mut app,
+            "folio_export_text",
+            json!({"path":text,"overwrite":true}),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(&text).unwrap(), "Café\nNext");
+        for name in ["folio_save_document", "folio_duplicate_document"] {
+            assert!(call(&mut app, name, json!({"path":source,"overwrite":true})).is_err());
+            assert_eq!(document(&app), before);
+        }
+        assert!(
+            call(
+                &mut app,
+                "folio_export_text",
+                json!({"path":dir.join("failed.txt"),"selection":selection(1,4)})
+            )
+            .is_err()
+        );
+        assert!(
+            call(
+                &mut app,
+                "folio_duplicate_document",
+                json!({"path":dir.join("missing/copy.docx")})
+            )
+            .is_err()
+        );
+        assert_eq!(document(&app), before);
+        for (name, input) in [
+            (
+                "folio_replace_text",
+                json!({"selection":selection(0,0),"text":"bad"}),
+            ),
+            (
+                "folio_format_text",
+                json!({"selection":selection(0,5),"bold":true}),
+            ),
+            (
+                "folio_format_paragraph",
+                json!({"selection":selection(0,0),"alignment":"right"}),
+            ),
+            (
+                "folio_convert_case",
+                json!({"selection":selection(0,5),"case":"upper"}),
+            ),
+            (
+                "folio_replace_all",
+                json!({"text":"Café","replacement":"bad"}),
+            ),
+            (
+                "folio_insert_page_break",
+                json!({"selection":selection(0,0)}),
+            ),
+            ("folio_undo", json!({})),
+            ("folio_redo", json!({})),
+        ] {
+            assert!(call(&mut app, name, input).is_err());
+            assert_eq!(document(&app), before);
+        }
+        call(
+            &mut app,
+            "folio_save_document",
+            json!({"path":dir.join("save-as.docx")}),
+        )
+        .unwrap();
+        assert!(app.read_only);
+        call(&mut app, "folio_open_document", json!({"path":copy})).unwrap();
+        assert!(!app.read_only);
+        call(&mut app, "folio_undo", json!({})).unwrap();
+        assert_eq!(app.editor.document().paragraph(0).unwrap().text(), "Café");
+    }
+    #[test]
+    fn parity_nested_layout_schema_and_invalid_history() {
+        let schemas = tools();
+        let schema =
+            |name: &str| &schemas.iter().find(|tool| tool["name"] == name).unwrap()["inputSchema"];
+        assert_eq!(
+            schema("folio_find")["properties"]["match_case"]["default"],
+            true
+        );
+        assert_eq!(
+            schema("folio_find")["properties"]["whole_words"]["default"],
+            false
+        );
+        assert_eq!(
+            schema("folio_format_paragraph")["required"],
+            json!(["selection"])
+        );
+        let mut app = FolioApp::default();
+        call(
+            &mut app,
+            "folio_replace_text",
+            json!({"selection":selection(0,0),"text":"First"}),
+        )
+        .unwrap();
+        call(
+            &mut app,
+            "folio_replace_text",
+            json!({"selection":selection(5,5),"text":" next"}),
+        )
+        .unwrap();
+        call(&mut app, "folio_undo", json!({})).unwrap();
+        let before = document(&app);
+        let layout = json!({"size":{"width_twips":12240,"height_twips":15840},"orientation":"portrait","margins":{"top":720,"right":720,"bottom":720,"left":720}});
+        for location in ["layout", "size", "margins"] {
+            let mut bad = layout.clone();
+            if location == "layout" {
+                bad["extra"] = json!(true);
+            } else {
+                bad[location]["extra"] = json!(true);
+            }
+            assert!(call(&mut app, "folio_set_page_layout", json!({"layout":bad})).is_err());
+            assert_eq!(document(&app), before);
+        }
+        for (name, bad) in [
+            ("folio_find", json!({"text":"First","match_case":null})),
+            (
+                "folio_convert_case",
+                json!({"selection":selection(0,5),"case":"invalid"}),
+            ),
+            (
+                "folio_format_text",
+                json!({"selection":{"anchor":{"block":0,"offset":0,"extra":true},"focus":{"block":0,"offset":5}},"bold":true}),
+            ),
+            (
+                "folio_format_text",
+                json!({"selection":selection(0,5),"highlight":{"red":0,"green":0,"blue":0,"extra":true}}),
+            ),
+        ] {
+            assert!(call(&mut app, name, bad).is_err());
+            assert_eq!(document(&app), before);
+        }
+        call(&mut app, "folio_redo", json!({})).unwrap();
+        assert_eq!(
+            app.editor.document().paragraph(0).unwrap().text(),
+            "First next"
+        );
+        call(&mut app, "folio_set_page_layout", json!({"layout":layout})).unwrap();
+        call(&mut app, "folio_undo", json!({})).unwrap();
+        assert_eq!(app.editor.document().page_layout, PageLayout::default());
+    }
+    #[test]
     fn edits_are_unicode_safe_atomic_and_undoable() {
         let mut app = FolioApp::default();
         call(
@@ -851,7 +1518,7 @@ mod tests {
         assert_eq!(replies.len(), 5);
         assert_eq!(replies[0]["error"]["code"], -32000);
         assert_eq!(replies[1]["result"]["protocolVersion"], "2025-11-25");
-        assert_eq!(replies[2]["result"]["tools"].as_array().unwrap().len(), 14);
+        assert_eq!(replies[2]["result"]["tools"].as_array().unwrap().len(), 19);
         assert_eq!(replies[3]["result"]["structuredContent"]["dirty"], false);
         assert_eq!(replies[4]["error"]["code"], -32602);
     }

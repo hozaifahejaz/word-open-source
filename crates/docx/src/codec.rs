@@ -1,6 +1,6 @@
 use crate::{
     DocxError, ExportReport,
-    formatting::{Diagnostics, Styles, number, on, para_props, run_props},
+    formatting::{Diagnostics, RunBackground, Styles, number, on, para_props, run_props},
     invalid,
     package::{Package, relationships, rels_path, target},
     xml::{self, Node},
@@ -226,10 +226,18 @@ fn paragraph(
         .and_then(|n| n.child("pStyle"))
         .and_then(|n| n.attr("val"))
         .or(styles.default_p.as_deref());
+    let mut background = styles.background.clone();
     if let Some(id) = pid {
-        styles.apply(id, &mut p.default_style, Some(&mut p.style), d)?;
+        styles.apply(
+            id,
+            &mut p.default_style,
+            &mut background,
+            Some(&mut p.style),
+            d,
+        )?;
     }
     let run_base = p.default_style.clone();
+    let run_background = background.clone();
     let mut break_before = if let Some(id) = pid {
         styles.page_break_before(id)?.unwrap_or(false)
     } else {
@@ -240,9 +248,9 @@ fn paragraph(
         single(props, "rPr")?;
         if let Some(mark) = props.child("rPr") {
             if let Some(id) = mark.child("rStyle").and_then(|r| r.attr("val")) {
-                styles.apply(id, &mut p.default_style, None, d)?;
+                styles.apply(id, &mut p.default_style, &mut background, None, d)?;
             }
-            run_props(mark, &mut p.default_style, false, d)?;
+            run_props(mark, &mut p.default_style, &mut background, false, d)?;
         }
         if let Some(before) = props.child("pageBreakBefore") {
             break_before = on(before)?;
@@ -256,7 +264,7 @@ fn paragraph(
         if c.is("pPr") {
             continue;
         }
-        inline(c, styles, &run_base, &mut pieces, d)?;
+        inline(c, styles, &run_base, &run_background, &mut pieces, d)?;
     }
     // Only an unformatted break-only paragraph is the canonical encoding of a
     // structural break. Keep styled empty paragraphs on either side of a break
@@ -281,6 +289,7 @@ fn inline(
     n: &Node,
     styles: &Styles,
     base: &TextStyle,
+    base_background: &RunBackground,
     pieces: &mut Vec<Option<Run>>,
     d: &mut Diagnostics,
 ) -> Result<(), DocxError> {
@@ -295,7 +304,7 @@ fn inline(
             || n.is("sdtContent")
         {
             for c in &n.children {
-                inline(c, styles, base, pieces, d)?;
+                inline(c, styles, base, base_background, pieces, d)?;
             }
         }
         return Ok(());
@@ -303,6 +312,7 @@ fn inline(
     d.attrs(n, &[], &[]);
     unexpected_text(n, d);
     let mut style = base.clone();
+    let mut background = base_background.clone();
     single(n, "rPr")?;
     let props = n.child("rPr");
     let rid = props
@@ -310,10 +320,10 @@ fn inline(
         .and_then(|n| n.attr("val"))
         .or(styles.default_r.as_deref());
     if let Some(id) = rid {
-        styles.apply(id, &mut style, None, d)?;
+        styles.apply(id, &mut style, &mut background, None, d)?;
     }
     if let Some(props) = props {
-        run_props(props, &mut style, false, d)?;
+        run_props(props, &mut style, &mut background, false, d)?;
     }
     for c in &n.children {
         if c.is("rPr") {
@@ -416,12 +426,27 @@ fn escape(s: &str) -> String {
 }
 fn run_xml(s: &TextStyle) -> String {
     // CT_RPr and CT_PPr schema order matters to Word/Open XML validators.
+    let shading = s
+        .highlight
+        .map(|c| {
+            format!(
+                "<w:shd w:val=\"clear\" w:fill=\"{:02X}{:02X}{:02X}\"/>",
+                c.red, c.green, c.blue
+            )
+        })
+        .unwrap_or_default();
+    let align = match s.vertical_align {
+        VerticalAlign::Baseline => "baseline",
+        VerticalAlign::Superscript => "superscript",
+        VerticalAlign::Subscript => "subscript",
+    };
     format!(
-        "<w:rPr><w:rFonts w:ascii=\"{}\" w:hAnsi=\"{}\"/><w:b w:val=\"{}\"/><w:i w:val=\"{}\"/><w:color w:val=\"{:02X}{:02X}{:02X}\"/><w:sz w:val=\"{}\"/><w:u w:val=\"{}\"/></w:rPr>",
+        "<w:rPr><w:rFonts w:ascii=\"{}\" w:hAnsi=\"{}\"/><w:b w:val=\"{}\"/><w:i w:val=\"{}\"/><w:strike w:val=\"{}\"/><w:color w:val=\"{:02X}{:02X}{:02X}\"/><w:sz w:val=\"{}\"/><w:u w:val=\"{}\"/>{shading}<w:vertAlign w:val=\"{align}\"/></w:rPr>",
         escape(&s.font_family),
         escape(&s.font_family),
         s.bold,
         s.italic,
+        s.strikethrough,
         s.color.red,
         s.color.green,
         s.color.blue,

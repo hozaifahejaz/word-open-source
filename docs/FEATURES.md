@@ -37,7 +37,7 @@ and build; published help scopes are recorded below without invented build numbe
 
 | Family | Status | Folio boundary | Reference |
 | --- | --- | --- | --- |
-| Paragraphs/styled text | Supported | Bold/italic/underline, family/size/RGB; native rich-text canvas with font fallback | Create document; ECMA Part 1 |
+| Paragraphs/styled text | Supported | Bold/italic/underline/strike, exclusive super/subscript, RGB text highlight, family/size/RGB; native rich-text canvas with font fallback | Create document; ECMA Part 1 |
 | Selection/editing | Supported | Grapheme-safe commands, selection, history, visual navigation; IME event support, OS verification limited | Design/edit; contracts |
 | Editing toolbar/statistics | Supported | Labeled original icons, plain-text Cut/Copy/Paste, clear text formatting; document/selection whitespace-word and grapheme counts | Desktop guide |
 | Find/replace | Supported | Literal paragraph-local, cross-run search; optional Unicode lowercase comparison and UAX #29 whole words; virtualized keyboard/mouse result navigation/counter; regex deferred | Design/edit; contracts |
@@ -149,3 +149,20 @@ Word rendering. OS dead-key preedit/commit worked, while full CJK candidate sele
 and cancellation, VoiceOver and accessibility auditing remain unverified.
 Emoji composition, Urdu/bidi shaping and exact Word pagination remain fidelity
 limitations. See [the detailed acceptance report](ACCEPTANCE.md).
+
+## Rich text formatting increment — 2026-10-10
+
+Home provides accessible original Strike, Superscript, Subscript and Highlight
+icons. Highlight offers None and seven named colors; core and DOCX formatting
+support arbitrary RGB backgrounds. Script text uses 75% font size and native
+top/bottom alignment. Glyph geometry, backgrounds, strike lines, pagination,
+selection and caret hit testing share the composed layout. Clear formatting resets
+all text properties. Pointer and keyboard activation return focus to the canvas
+as with Bold; script buttons toggle one mutually exclusive enum.
+
+DOCX supports `w:strike`, `w:vertAlign`, RGB clear run shading and named highlight
+colors. Highlight overrides shading across inheritance; layered backgrounds and
+unsupported patterns/theme colors warn. Workspace/recovery writes schema 2 and
+reads schema 1 with default new properties, preserving unsupported schema 3+
+files against save. See [codec boundaries](../crates/docx/README.md) and
+[acceptance evidence](ACCEPTANCE.md).

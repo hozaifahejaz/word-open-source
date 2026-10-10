@@ -605,3 +605,93 @@ fn imported_xml_rejects_forbidden_controls_in_text_and_attributes() {
     );
     assert_eq!(import(&xml).document.paragraph(0).unwrap().text(), "A\tB");
 }
+
+#[test]
+fn rich_run_properties_import_without_loss_warnings() {
+    let doc = format!(
+        r#"<w:document xmlns:w="{W}"><w:body><w:p><w:r><w:rPr><w:strike/><w:vertAlign w:val="superscript"/><w:shd w:val="clear" w:fill="F0E678"/></w:rPr><w:t>é</w:t></w:r></w:p></w:body></w:document>"#
+    );
+    let report = import(&doc);
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    let style = &report.document.paragraph(0).unwrap().runs[0].style;
+    assert!(style.strikethrough);
+    assert_eq!(style.vertical_align, VerticalAlign::Superscript);
+    assert_eq!(style.highlight, Some(Color::rgb(240, 230, 120)));
+    roundtrip(&report.document);
+}
+
+#[test]
+fn rich_background_precedence_palette_and_solid_foreground() {
+    for (properties, color, warnings) in [
+        (
+            r#"<w:highlight w:val="yellow"/><w:shd w:val="clear" w:fill="ABCDEF"/>"#,
+            Some(Color::rgb(255, 255, 0)),
+            true,
+        ),
+        (
+            r#"<w:shd w:val="clear" w:fill="ABCDEF"/><w:highlight w:val="yellow"/>"#,
+            Some(Color::rgb(255, 255, 0)),
+            true,
+        ),
+        (
+            r#"<w:shd w:val="solid" w:fill="ABCDEF" w:color="123456"/>"#,
+            Some(Color::rgb(18, 52, 86)),
+            false,
+        ),
+        (r#"<w:shd w:val="solid" w:fill="ABCDEF"/>"#, None, true),
+        (r#"<w:shd w:val="pct20" w:fill="ABCDEF"/>"#, None, true),
+        (
+            r#"<w:shd w:val="clear" w:fill="ABCDEF" w:themeFill="accent1"/>"#,
+            None,
+            true,
+        ),
+        (
+            r#"<w:highlight w:val="darkBlue"/>"#,
+            Some(Color::rgb(0, 0, 128)),
+            false,
+        ),
+        (r#"<w:highlight w:val="none"/>"#, None, false),
+    ] {
+        let doc = format!(
+            r#"<w:document xmlns:w="{W}"><w:body><w:p><w:r><w:rPr>{properties}</w:rPr><w:t>x</w:t></w:r></w:p></w:body></w:document>"#
+        );
+        let report = import(&doc);
+        assert_eq!(
+            report.document.paragraph(0).unwrap().runs[0]
+                .style
+                .highlight,
+            color,
+            "{properties}"
+        );
+        assert_eq!(
+            !report.warnings.is_empty(),
+            warnings,
+            "{properties}: {:?}",
+            report.warnings
+        );
+    }
+}
+
+#[test]
+fn rich_background_inheritance_keeps_highlight_over_direct_shading_and_reveals_shading() {
+    let doc = format!(
+        r#"<w:document xmlns:w="{W}"><w:body><w:p><w:pPr><w:pStyle w:val="Base"/></w:pPr><w:r><w:rPr><w:shd w:val="clear" w:fill="123456"/></w:rPr><w:t>a</w:t></w:r><w:r><w:rPr><w:highlight w:val="none"/></w:rPr><w:t>b</w:t></w:r></w:p></w:body></w:document>"#
+    );
+    let styles = format!(
+        r#"<w:styles xmlns:w="{W}"><w:style w:type="paragraph" w:styleId="Base"><w:rPr><w:strike/><w:vertAlign w:val="subscript"/><w:highlight w:val="green"/><w:shd w:val="clear" w:fill="ABCDEF"/></w:rPr></w:style></w:styles>"#
+    );
+    let mut pkg = parts(&doc);
+    pkg.extend([
+        ("word/_rels/document.xml.rels", STYLE_REL.as_bytes()),
+        ("word/styles.xml", styles.as_bytes()),
+    ]);
+    let report = import_docx(Cursor::new(zip(&pkg))).unwrap();
+    let runs = &report.document.paragraph(0).unwrap().runs;
+    assert_eq!(runs[0].style.highlight, Some(Color::rgb(0, 255, 0)));
+    assert_eq!(runs[1].style.highlight, Some(Color::rgb(171, 205, 239)));
+    assert!(
+        runs.iter()
+            .all(|r| r.style.strikethrough && r.style.vertical_align == VerticalAlign::Subscript)
+    );
+    assert!(report.warnings.iter().any(|w| w.feature == Feature::Styles));
+}

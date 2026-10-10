@@ -5,6 +5,36 @@ Available host: Apple Silicon arm64, macOS **27.0 (26A428)**, Apple clang
 21.0.0, Rust **1.90.0**. Windows and Linux were not executed locally.
 This report records scoped evidence, not full Word parity or a release certification.
 
+## Rich text formatting increment — 2026-10-10
+
+Focused RED/GREEN tests establish mixed-run grapheme/style preservation with
+Undo/Redo, old JSON defaults and snake_case vertical alignment, highlight clear,
+transactional style validation, schema-1 migration/write-2 and schema-3 byte
+preservation. DOCX regressions cover strike/script/RGB shading round trips,
+highlight precedence in both XML child orders, inherited layers and highlight
+clearing, solid foreground color, and unsupported pattern/theme diagnostics.
+
+Desktop tests inspect real egui glyph positions and painted background meshes,
+75% script font sizes, top/bottom offsets, all-script wrapped rows, justification,
+and valid selection/caret/hit geometry at 0.75, 1.0 and 1.5 zoom. AccessKit node
+bounds drive pointer activation of the four new original icon controls and
+palette None; keyboard traversal activates each control and palette Yellow,
+returns canvas focus and does not insert the activation Enter. Canvas Tab retains
+its existing literal-tab behavior; keyboard traversal starts with ribbon focus.
+Justified trailing whitespace may share a caret x coordinate, so hit checks
+compare the actual caret position when multiple valid boundaries coincide.
+
+`sh scripts/validate-local.sh` passed: `cargo fmt --check`, 171 workspace tests
+(35 core commands, 6 recovery serialization, 104 desktop, 26 DOCX; 0 failures,
+one intentionally ignored manual benchmark), clippy with warnings denied, and
+local unsigned Apple Silicon release packaging. All commands used the checkout's
+Rust 1.90.0 and offline locked dependency cache. `git diff --check` also passed.
+
+The scope includes native egui layout and automated input/accessibility checks;
+it does not claim a new OS screen-reader audit, Windows/Linux GUI run, or visual
+comparison in Word/LibreOffice. Final local validation and detailed RED/GREEN
+outputs are recorded in [Task 2 report](../.superpowers/sdd/2026-10-10-polished-editing/task-2-report.md).
+
 ## Writing tools increment — 2026-10-10
 
 Task 2 adds the selection-only Aa case menu and the labeled Symbols picker.

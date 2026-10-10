@@ -26,7 +26,7 @@ impl CheckpointDebounce {
     }
 }
 
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug)]
 pub enum StoreError {
@@ -308,7 +308,7 @@ impl WorkspaceStore {
             Err(e) => return Err(e.into()),
         };
         let header: Header = serde_json::from_slice(&bytes)?;
-        if header.schema_version != SCHEMA_VERSION {
+        if !(1..=SCHEMA_VERSION).contains(&header.schema_version) {
             return Err(StoreError::UnsupportedSchemaVersion(header.schema_version));
         }
         let envelope: Envelope<T> = serde_json::from_slice(&bytes)?;
@@ -548,6 +548,91 @@ mod tests {
         assert_eq!(loaded, snapshot);
         store.clear_recovery().unwrap();
         assert!(store.load_recovery().unwrap().is_none());
+    }
+    #[test]
+    fn schema_one_migrates_and_schema_two_preserves_rich_recovery() {
+        let dir = Directory::new();
+        fs::create_dir_all(&dir.0).unwrap();
+        let store = WorkspaceStore::at(dir.0.clone());
+        let state = WorkspaceState {
+            dark_mode: true,
+            zoom: 1.5,
+            ..Default::default()
+        };
+        fs::write(
+            dir.0.join("workspace.json"),
+            serde_json::to_vec(&serde_json::json!({"schema_version":1,"data":state})).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(store.load_state().unwrap().unwrap(), state);
+        store.save_state(&state).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.0.join("workspace.json")).unwrap()).unwrap();
+        assert_eq!(value["schema_version"], 2);
+        let snapshot = RecoverySnapshot {
+            document: Document::default(),
+            path: Some(path("old.docx")),
+            protected_source: None,
+            warnings: vec![],
+            selection: Selection::default(),
+            captured_unix_seconds: 42,
+        };
+        let mut old = serde_json::to_value(&snapshot).unwrap();
+        let style = old["document"]["blocks"][0]["Paragraph"]["default_style"]
+            .as_object_mut()
+            .unwrap();
+        for property in ["strikethrough", "vertical_align", "highlight"] {
+            style.remove(property);
+        }
+        fs::write(
+            dir.0.join("recovery.json"),
+            serde_json::to_vec(&serde_json::json!({"schema_version":1,"data":old})).unwrap(),
+        )
+        .unwrap();
+        let mut recovered = store.load_recovery().unwrap().unwrap();
+        assert_eq!(recovered, snapshot);
+        let document_core::Block::Paragraph(p) = &mut recovered.document.blocks[0] else {
+            unreachable!()
+        };
+        p.default_style.strikethrough = true;
+        p.default_style.vertical_align = document_core::VerticalAlign::Subscript;
+        p.default_style.highlight = Some(document_core::Color::rgb(12, 34, 56));
+        store.save_recovery(&recovered).unwrap();
+        assert_eq!(store.load_recovery().unwrap().unwrap(), recovered);
+        let value: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.0.join("recovery.json")).unwrap()).unwrap();
+        assert_eq!(value["schema_version"], 2);
+    }
+    #[test]
+    fn schema_three_preserves_both_envelopes_against_save() {
+        let dir = Directory::new();
+        fs::create_dir_all(&dir.0).unwrap();
+        let store = WorkspaceStore::at(dir.0.clone());
+        let bytes = br#"{"schema_version":3,"future":"preserve this"}"#;
+        for file in ["workspace.json", "recovery.json"] {
+            fs::write(dir.0.join(file), bytes).unwrap();
+        }
+        assert!(matches!(
+            store.load_state(),
+            Err(StoreError::UnsupportedSchemaVersion(3))
+        ));
+        assert!(matches!(
+            store.load_recovery(),
+            Err(StoreError::UnsupportedSchemaVersion(3))
+        ));
+        assert!(store.save_state(&WorkspaceState::default()).is_err());
+        let snapshot = RecoverySnapshot {
+            document: Document::default(),
+            path: None,
+            protected_source: None,
+            warnings: vec![],
+            selection: Selection::default(),
+            captured_unix_seconds: 1,
+        };
+        assert!(store.save_recovery(&snapshot).is_err());
+        for file in ["workspace.json", "recovery.json"] {
+            assert_eq!(fs::read(dir.0.join(file)).unwrap(), bytes);
+        }
     }
     #[test]
     fn zoom_is_clamped_and_nonfinite_uses_default() {

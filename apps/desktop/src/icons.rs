@@ -20,6 +20,10 @@ pub enum Icon {
     Bold,
     Italic,
     Underline,
+    Strike,
+    Superscript,
+    Subscript,
+    Highlight,
     ClearFormatting,
     AlignLeft,
     AlignCenter,
@@ -53,6 +57,9 @@ impl Icon {
             Action::Bold => Self::Bold,
             Action::Italic => Self::Italic,
             Action::Underline => Self::Underline,
+            Action::Strike => Self::Strike,
+            Action::Superscript => Self::Superscript,
+            Action::Subscript => Self::Subscript,
             Action::ClearFormatting => Self::ClearFormatting,
             Action::Cut => Self::Cut,
             Action::Copy => Self::Copy,
@@ -203,6 +210,53 @@ impl Icon {
                     (19., 3.),
                 ]);
                 line((4., 22.), (20., 22.));
+            }
+            Self::Strike => {
+                path(&[
+                    (18., 5.),
+                    (15., 3.),
+                    (9., 3.),
+                    (6., 6.),
+                    (7., 10.),
+                    (16., 14.),
+                    (18., 18.),
+                    (15., 21.),
+                    (9., 21.),
+                    (6., 19.),
+                ]);
+                line((3., 12.), (21., 12.));
+            }
+            Self::Superscript | Self::Subscript => {
+                line((4., 8.), (13., 20.));
+                line((13., 8.), (4., 20.));
+                let y = if matches!(self, Self::Superscript) {
+                    2.
+                } else {
+                    13.
+                };
+                path(&[
+                    (16., y + 2.),
+                    (18., y),
+                    (21., y + 1.),
+                    (21., y + 3.),
+                    (16., y + 7.),
+                    (22., y + 7.),
+                ]);
+            }
+            Self::Highlight => {
+                path(&[
+                    (7., 16.),
+                    (5., 13.),
+                    (15., 3.),
+                    (21., 9.),
+                    (11., 19.),
+                    (7., 16.),
+                    (4., 20.),
+                    (8., 20.),
+                    (11., 19.),
+                ]);
+                line((11., 7.), (17., 13.));
+                line((3., 23.), (21., 23.));
             }
             Self::ClearFormatting => {
                 path(&[(3., 15.), (8., 3.), (13., 15.)]);

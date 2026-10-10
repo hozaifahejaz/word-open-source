@@ -6,7 +6,8 @@ network operations. It uses the `document-core` model and established
 
 ## Supported conversion
 
-Paragraphs and styled runs; bold, italic, single underline; font family,
+Paragraphs and styled runs; bold, italic, single underline, strikethrough,
+superscript/subscript and RGB text highlight; font family,
 half-point size and RGB color; left/center/right/justified alignment;
 before/after spacing in twips and multiple/exact/at-least line spacing;
 explicit page breaks; and one document-wide size, orientation and margin set.
@@ -14,12 +15,24 @@ Matched ASCII/high-ANSI font slots map to one core font family. Font fallback,
 East Asian/complex-script slots, theme fonts and theme colors cannot be preserved.
 
 Import resolves document defaults, default/selected paragraph styles,
-`basedOn` chains, character styles and direct formatting. Bold/italic in style
+`basedOn` chains, character styles and direct formatting. Bold/italic/strike in style
 chains use toggle semantics; direct formatting can explicitly clear them.
 Direct paragraph-mark formatting controls the empty paragraph typing style and
 does not incorrectly override existing runs. Paragraph-mark formatting nested in
 named styles is omitted with a warning, requiring a converted copy.
 Spacing attributes inherit independently.
+
+Run highlights export as `w:shd w:val="clear"` with an RGB fill, allowing arbitrary
+colors. Import accepts the 16 named `w:highlight` colors plus `none`, RGB clear
+run shading, and solid shading only through its foreground `w:color` (never its
+background `w:fill`). Unsupported patterns, automatic/missing shading colors and
+theme shading warn. Import keeps highlight and shading layers through defaults,
+named styles and direct formatting so highlight wins independent of XML child
+order; clearing highlight reveals inherited shading. The public model retains
+one visible background, so layered highlight/shading warns about its flattening.
+These choices follow the official Open XML [Shading](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.shading?view=openxml-3.0.1)
+and [Highlight](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.highlight?view=openxml-3.0.1)
+semantics, reviewed 2026-10-10. Named styles remain flattened on export.
 XML namespaces are resolved by URI, including alternate prefixes and the strict
 WordprocessingML URI. Package relationships locate the main document and styles;
 neither is assumed to live at a fixed path. UTF-8 XML, predefined/numeric entities,

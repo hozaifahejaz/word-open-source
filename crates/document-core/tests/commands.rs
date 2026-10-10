@@ -212,6 +212,7 @@ fn range_formatting_splits_runs_and_does_not_touch_outside_text() {
         font_family: Some("Example Serif".into()),
         size_half_points: Some(27),
         color: Some(Color::rgb(5, 6, 7)),
+        ..Default::default()
     };
     e.execute(Command::FormatRuns {
         selection: range((0, 2), (0, 4)),
@@ -974,4 +975,80 @@ fn assert_case_preserves_styles(case: TextCase, input: &str, expected: &str) {
         assert_eq!(e.document(), &original);
         assert_eq!(e.selection(), selection);
     }
+}
+
+#[test]
+fn rich_formatting_preserves_mixed_graphemes_and_undo_redo() {
+    let bold = TextStyle {
+        bold: true,
+        ..Default::default()
+    };
+    let italic = TextStyle {
+        italic: true,
+        ..Default::default()
+    };
+    let document = Document {
+        blocks: vec![Block::Paragraph(Paragraph {
+            runs: vec![
+                Run::new("ae", bold.clone()),
+                Run::new("\u{301}👩‍💻z", italic.clone()),
+            ],
+            ..Default::default()
+        })],
+        ..Default::default()
+    };
+    let mut e = Editor::new(document.clone()).unwrap();
+    let selection = range((0, 1), (0, 15));
+    e.execute(Command::FormatRuns {
+        selection,
+        patch: StylePatch {
+            strikethrough: Some(true),
+            vertical_align: Some(VerticalAlign::Superscript),
+            highlight: Some(Some(Color::rgb(200, 210, 220))),
+            ..Default::default()
+        },
+    })
+    .unwrap();
+    let formatted = e.document().clone();
+    let p = formatted.paragraph(0).unwrap();
+    assert_eq!(p.text(), "ae\u{301}👩‍💻z");
+    assert_eq!(p.runs.len(), 4);
+    assert!(!p.runs[0].style.strikethrough && !p.runs[3].style.strikethrough);
+    assert!(p.runs[1].style.bold && p.runs[2].style.italic);
+    for run in &p.runs[1..3] {
+        assert!(run.style.strikethrough);
+        assert_eq!(run.style.vertical_align, VerticalAlign::Superscript);
+        assert_eq!(run.style.highlight, Some(Color::rgb(200, 210, 220)));
+    }
+    e.execute(Command::Undo).unwrap();
+    assert_eq!(e.document(), &document);
+    e.execute(Command::Redo).unwrap();
+    assert_eq!(e.document(), &formatted);
+    e.execute(Command::FormatRuns {
+        selection,
+        patch: StylePatch {
+            highlight: Some(None),
+            vertical_align: Some(VerticalAlign::Subscript),
+            ..Default::default()
+        },
+    })
+    .unwrap();
+    for run in &e.document().paragraph(0).unwrap().runs[1..3] {
+        assert_eq!(run.style.highlight, None);
+        assert_eq!(run.style.vertical_align, VerticalAlign::Subscript);
+        assert!(run.style.strikethrough);
+    }
+    let before = e.document().clone();
+    assert_eq!(
+        e.execute(Command::FormatRuns {
+            selection,
+            patch: StylePatch {
+                size_half_points: Some(0),
+                highlight: Some(Some(Color::BLACK)),
+                ..Default::default()
+            }
+        }),
+        Err(CoreError::InvalidStyle)
+    );
+    assert_eq!(e.document(), &before);
 }

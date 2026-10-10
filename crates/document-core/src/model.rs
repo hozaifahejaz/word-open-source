@@ -76,12 +76,28 @@ impl Color {
     }
 }
 
+/// Mutually exclusive vertical positioning of a text run.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerticalAlign {
+    #[default]
+    Baseline,
+    Superscript,
+    Subscript,
+}
+
 /// Font sizes are half-points (24 means 12pt), matching WordprocessingML.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TextStyle {
     pub bold: bool,
     pub italic: bool,
     pub underline: bool,
+    #[serde(default)]
+    pub strikethrough: bool,
+    #[serde(default)]
+    pub vertical_align: VerticalAlign,
+    #[serde(default)]
+    pub highlight: Option<Color>,
     pub font_family: String,
     pub size_half_points: u16,
     pub color: Color,
@@ -92,6 +108,9 @@ impl Default for TextStyle {
             bold: false,
             italic: false,
             underline: false,
+            strikethrough: false,
+            vertical_align: VerticalAlign::Baseline,
+            highlight: None,
             font_family: "sans-serif".into(),
             size_half_points: 24,
             color: Color::BLACK,
@@ -113,12 +132,16 @@ pub struct StylePatch {
     pub bold: Option<bool>,
     pub italic: Option<bool>,
     pub underline: Option<bool>,
+    pub strikethrough: Option<bool>,
+    pub vertical_align: Option<VerticalAlign>,
+    /// None preserves; Some(None) clears; Some(Some(color)) sets the highlight.
+    pub highlight: Option<Option<Color>>,
     pub font_family: Option<String>,
     pub size_half_points: Option<u16>,
     pub color: Option<Color>,
 }
 impl StylePatch {
-    pub(crate) fn apply(&self, style: &mut TextStyle) {
+    pub fn apply(&self, style: &mut TextStyle) {
         if let Some(v) = self.bold {
             style.bold = v;
         }
@@ -127,6 +150,15 @@ impl StylePatch {
         }
         if let Some(v) = self.underline {
             style.underline = v;
+        }
+        if let Some(v) = self.strikethrough {
+            style.strikethrough = v;
+        }
+        if let Some(v) = self.vertical_align {
+            style.vertical_align = v;
+        }
+        if let Some(v) = self.highlight {
+            style.highlight = v;
         }
         if let Some(v) = &self.font_family {
             style.font_family = v.clone();

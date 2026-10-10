@@ -735,23 +735,10 @@ impl FolioApp {
     fn format(&mut self, patch: StylePatch) {
         if self.editor.selection().is_collapsed() {
             let mut s = self.current_style();
-            if let Some(v) = patch.bold {
-                s.bold = v;
-            }
-            if let Some(v) = patch.italic {
-                s.italic = v;
-            }
-            if let Some(v) = patch.underline {
-                s.underline = v;
-            }
-            if let Some(v) = patch.font_family {
-                s.font_family = v;
-            }
-            if let Some(v) = patch.size_half_points {
-                s.size_half_points = v;
-            }
-            if let Some(v) = patch.color {
-                s.color = v;
+            patch.apply(&mut s);
+            if let Err(error) = s.validate() {
+                self.error = Some(error.to_string());
+                return;
             }
             self.typing = Some(s);
         } else {
@@ -761,6 +748,37 @@ impl FolioApp {
             });
             self.typing = None;
         }
+    }
+    fn highlight_control(&mut self, ui: &mut egui::Ui, style: &TextStyle) {
+        let response = ui.add(
+            IconButton::new(Icon::Highlight, "Highlight")
+                .selected(style.highlight.is_some())
+                .compact(),
+        );
+        egui::Popup::menu(&response).show(|ui| {
+            for (label, color) in [
+                ("None", None),
+                ("Yellow", Some(Color::rgb(255, 255, 0))),
+                ("Green", Some(Color::rgb(0, 255, 0))),
+                ("Cyan", Some(Color::rgb(0, 255, 255))),
+                ("Pink", Some(Color::rgb(255, 0, 255))),
+                ("Blue", Some(Color::rgb(0, 0, 255))),
+                ("Red", Some(Color::rgb(255, 0, 0))),
+                ("Light gray", Some(Color::rgb(192, 192, 192))),
+            ] {
+                if ui
+                    .add(egui::Button::selectable(style.highlight == color, label))
+                    .clicked()
+                {
+                    self.format(StylePatch {
+                        highlight: Some(color),
+                        ..Default::default()
+                    });
+                    self.focus_canvas = true;
+                    ui.close();
+                }
+            }
+        });
     }
     fn font_size_control(&mut self, ui: &mut egui::Ui, style: &TextStyle) -> egui::Response {
         let label = ui.label("Size");
@@ -1035,6 +1053,25 @@ impl FolioApp {
                 underline: Some(!self.current_style().underline),
                 ..Default::default()
             }),
+            Action::Strike => self.format(StylePatch {
+                strikethrough: Some(!self.current_style().strikethrough),
+                ..Default::default()
+            }),
+            Action::Superscript | Action::Subscript => {
+                let requested = if action == Action::Superscript {
+                    VerticalAlign::Superscript
+                } else {
+                    VerticalAlign::Subscript
+                };
+                self.format(StylePatch {
+                    vertical_align: Some(if self.current_style().vertical_align == requested {
+                        VerticalAlign::Baseline
+                    } else {
+                        requested
+                    }),
+                    ..Default::default()
+                });
+            }
             Action::ClearFormatting => {
                 let style = TextStyle::default();
                 self.format(StylePatch {
@@ -1044,6 +1081,9 @@ impl FolioApp {
                     font_family: Some(style.font_family),
                     size_half_points: Some(style.size_half_points),
                     color: Some(style.color),
+                    strikethrough: Some(style.strikethrough),
+                    vertical_align: Some(style.vertical_align),
+                    highlight: Some(style.highlight),
                 });
                 self.focus_canvas = true;
             }
@@ -1085,7 +1125,15 @@ impl FolioApp {
                 self.focus_canvas = true;
             }
         }
-        if matches!(action, Action::Bold | Action::Italic | Action::Underline) {
+        if matches!(
+            action,
+            Action::Bold
+                | Action::Italic
+                | Action::Underline
+                | Action::Strike
+                | Action::Superscript
+                | Action::Subscript
+        ) {
             self.focus_canvas = true;
         }
     }
@@ -1466,6 +1514,9 @@ impl FolioApp {
                             ("Bold", style.bold, Action::Bold),
                             ("Italic", style.italic, Action::Italic),
                             ("Underline", style.underline, Action::Underline),
+                            ("Strike", style.strikethrough, Action::Strike),
+                            ("Superscript", style.vertical_align == VerticalAlign::Superscript, Action::Superscript),
+                            ("Subscript", style.vertical_align == VerticalAlign::Subscript, Action::Subscript),
                         ] {
                             if ui
                                 .add(
@@ -1479,6 +1530,7 @@ impl FolioApp {
                                 self.action(action, ctx);
                             }
                         }
+                        self.highlight_control(ui, &style);
                         ui.separator();
                         let mut family = if layout::is_serif_family(&style.font_family) {
                             "serif"
@@ -3190,7 +3242,7 @@ mod app_tests {
     fn unreadable_recovery_bytes() -> [&'static [u8]; 2] {
         [
             b"{broken\n  keep these bytes",
-            b"{\"schema_version\":999,\"data\":{\"future\":true}}\n",
+            b"{\"schema_version\":3,\"data\":{\"future\":true}}\n",
         ]
     }
     #[test]
@@ -3843,7 +3895,7 @@ mod app_tests {
         // Unsupported schema forces a deterministic refusal without replacing the old bytes.
         let blocked = String::from_utf8(bytes)
             .unwrap()
-            .replace("\"schema_version\": 1", "\"schema_version\": 999");
+            .replace("\"schema_version\": 2", "\"schema_version\": 3");
         std::fs::write(dir.0.join("recovery.json"), &blocked).unwrap();
         app.insert(" new".into());
         assert!(!app.flush_recovery());
@@ -4135,6 +4187,35 @@ mod app_tests {
         assert!(!app.editor.is_dirty());
     }
     #[test]
+    fn rich_caret_formatting_uses_validated_shared_patch_and_clear_resets_all() {
+        let mut app = FolioApp::default();
+        app.format(StylePatch {
+            strikethrough: Some(true),
+            vertical_align: Some(VerticalAlign::Superscript),
+            highlight: Some(Some(Color::rgb(240, 230, 120))),
+            ..Default::default()
+        });
+        let style = app.current_style();
+        assert!(style.strikethrough);
+        assert_eq!(style.vertical_align, VerticalAlign::Superscript);
+        assert_eq!(style.highlight, Some(Color::rgb(240, 230, 120)));
+        app.format(StylePatch {
+            vertical_align: Some(VerticalAlign::Subscript),
+            highlight: Some(None),
+            ..Default::default()
+        });
+        assert_eq!(app.current_style().vertical_align, VerticalAlign::Subscript);
+        assert_eq!(app.current_style().highlight, None);
+        let before = app.current_style();
+        app.format(StylePatch {
+            font_family: Some(" ".into()),
+            ..Default::default()
+        });
+        assert_eq!(app.current_style(), before);
+        app.action(Action::ClearFormatting, &egui::Context::default());
+        assert_eq!(app.current_style(), TextStyle::default());
+    }
+    #[test]
     fn clear_formatting_resets_only_selected_text_and_is_undoable() {
         let ctx = egui::Context::default();
         let mut app = FolioApp {
@@ -4145,6 +4226,9 @@ mod app_tests {
                 font_family: "serif".into(),
                 size_half_points: 36,
                 color: Color::rgb(150, 20, 20),
+                strikethrough: true,
+                vertical_align: VerticalAlign::Subscript,
+                highlight: Some(Color::rgb(255, 255, 0)),
             }),
             ..Default::default()
         };
@@ -4515,6 +4599,145 @@ mod app_tests {
             let _ = ctx.end_pass();
         }
         requested_reveal
+    }
+    fn click_rich_control(app: &mut FolioApp, ctx: &egui::Context, label: &str) {
+        frame(app, ctx, vec![]);
+        let output = frame(app, ctx, vec![]);
+        let bounds = output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .unwrap()
+            .nodes
+            .iter()
+            .find_map(|(_, node)| {
+                (node.label() == Some(label))
+                    .then(|| node.bounds())
+                    .flatten()
+            })
+            .unwrap_or_else(|| panic!("missing accessible rich control: {label}"));
+        let pos = egui::pos2(
+            ((bounds.x0 + bounds.x1) * 0.5) as f32,
+            ((bounds.y0 + bounds.y1) * 0.5) as f32,
+        );
+        for pressed in [true, false] {
+            frame(
+                app,
+                ctx,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    },
+                ],
+            );
+        }
+    }
+    #[test]
+    fn rich_home_controls_apply_mutually_exclusive_scripts_and_highlight_palette() {
+        let ctx = egui::Context::default();
+        layout::install_fonts(&ctx);
+        ctx.enable_accesskit();
+        let mut app = FolioApp::default();
+        app.insert("selected e\u{301}".into());
+        app.editor
+            .set_selection(editing::select_all(app.editor.document()))
+            .unwrap();
+        let original = app.editor.document().clone();
+        click_rich_control(&mut app, &ctx, "Strike");
+        assert!(
+            app.editor.document().paragraph(0).unwrap().runs[0]
+                .style
+                .strikethrough
+        );
+        click_rich_control(&mut app, &ctx, "Superscript");
+        assert_eq!(
+            app.current_style().vertical_align,
+            VerticalAlign::Superscript
+        );
+        click_rich_control(&mut app, &ctx, "Subscript");
+        assert_eq!(app.current_style().vertical_align, VerticalAlign::Subscript);
+        click_rich_control(&mut app, &ctx, "Subscript");
+        assert_eq!(app.current_style().vertical_align, VerticalAlign::Baseline);
+        click_rich_control(&mut app, &ctx, "Highlight");
+        click_rich_control(&mut app, &ctx, "Yellow");
+        assert_eq!(app.current_style().highlight, Some(Color::rgb(255, 255, 0)));
+        click_rich_control(&mut app, &ctx, "Highlight");
+        click_rich_control(&mut app, &ctx, "None");
+        assert_eq!(app.current_style().highlight, None);
+        for _ in 0..6 {
+            app.action(Action::Undo, &ctx);
+        }
+        assert_eq!(app.editor.document(), &original);
+    }
+    #[test]
+    fn rich_home_controls_support_keyboard_activation_and_restore_canvas_focus() {
+        for label in ["Strike", "Superscript", "Subscript", "Highlight"] {
+            let ctx = egui::Context::default();
+            layout::install_fonts(&ctx);
+            ctx.enable_accesskit();
+            let mut app = FolioApp::default();
+            app.insert("keep".into());
+            app.editor.mark_saved();
+            // The canvas reserves Tab for literal tabs, as before. Begin with
+            // ribbon focus after dismissing its case menu, then traverse controls.
+            click_search_text(&mut app, &ctx, "Aa");
+            frame(&mut app, &ctx, vec![key(Key::Escape, Default::default())]);
+            let mut reached = false;
+            for _ in 0..80 {
+                let output = frame(&mut app, &ctx, vec![key(Key::Tab, Default::default())]);
+                let update = output.platform_output.accesskit_update.as_ref().unwrap();
+                if update
+                    .nodes
+                    .iter()
+                    .any(|(id, node)| *id == update.focus && node.label() == Some(label))
+                {
+                    reached = true;
+                    break;
+                }
+            }
+            assert!(reached, "{label} must be keyboard reachable");
+            frame(&mut app, &ctx, vec![key(Key::Enter, Default::default())]);
+            if label == "Highlight" {
+                let mut yellow = false;
+                for _ in 0..20 {
+                    let output = frame(&mut app, &ctx, vec![key(Key::Tab, Default::default())]);
+                    let update = output.platform_output.accesskit_update.as_ref().unwrap();
+                    if update
+                        .nodes
+                        .iter()
+                        .any(|(id, node)| *id == update.focus && node.label() == Some("Yellow"))
+                    {
+                        yellow = true;
+                        break;
+                    }
+                }
+                assert!(yellow, "highlight palette must be keyboard reachable");
+                frame(&mut app, &ctx, vec![key(Key::Enter, Default::default())]);
+            }
+            assert_eq!(app.editor.document().paragraph(0).unwrap().text(), "keep");
+            assert!(!app.editor.is_dirty());
+            assert!(ctx.memory(|m| m.has_focus(egui::Id::new("document-canvas"))));
+            match label {
+                "Strike" => assert!(app.current_style().strikethrough),
+                "Superscript" => assert_eq!(
+                    app.current_style().vertical_align,
+                    VerticalAlign::Superscript
+                ),
+                "Subscript" => {
+                    assert_eq!(app.current_style().vertical_align, VerticalAlign::Subscript)
+                }
+                "Highlight" => {
+                    assert_eq!(app.current_style().highlight, Some(Color::rgb(255, 255, 0)))
+                }
+                _ => unreachable!(),
+            }
+            frame(&mut app, &ctx, vec![egui::Event::Text("!".into())]);
+            assert_eq!(app.editor.document().paragraph(0).unwrap().text(), "keep!");
+        }
     }
     #[test]
     fn case_menu_converts_unicode_and_preserves_punctuation_and_whitespace() {

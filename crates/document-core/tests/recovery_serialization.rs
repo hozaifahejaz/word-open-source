@@ -154,6 +154,7 @@ fn native_document_json_round_trips_every_model_variant() {
         font_family: "Example Serif".into(),
         size_half_points: 27,
         color: Color::rgb(12, 34, 56),
+        ..Default::default()
     };
     let document = Document {
         blocks: vec![
@@ -239,4 +240,22 @@ fn native_document_json_round_trips_every_model_variant() {
     let selection = Selection::new(Position::new(0, 2), position);
     let json = serde_json::to_string(&selection).unwrap();
     assert_eq!(serde_json::from_str::<Selection>(&json).unwrap(), selection);
+}
+
+#[test]
+fn rich_style_json_preserves_new_properties_and_old_defaults() {
+    let old = r#"{"bold":true,"italic":false,"underline":false,"font_family":"sans-serif","size_half_points":24,"color":{"red":0,"green":0,"blue":0}}"#;
+    let style: TextStyle = serde_json::from_str(old).unwrap();
+    let value = serde_json::to_value(style).unwrap();
+    assert_eq!(value["strikethrough"], false);
+    assert_eq!(value["vertical_align"], "baseline");
+    assert_eq!(value["highlight"], serde_json::Value::Null);
+    for align in ["superscript", "subscript"] {
+        let mut input: serde_json::Value = serde_json::from_str(old).unwrap();
+        input["strikethrough"] = true.into();
+        input["vertical_align"] = align.into();
+        input["highlight"] = serde_json::json!({"red":240,"green":230,"blue":120});
+        let style: TextStyle = serde_json::from_value(input.clone()).unwrap();
+        assert_eq!(serde_json::to_value(style).unwrap(), input);
+    }
 }

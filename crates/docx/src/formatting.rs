@@ -103,9 +103,98 @@ pub(crate) fn on(n: &Node) -> Result<bool, DocxError> {
         v => Err(invalid(format!("invalid {} boolean {v:?}", n.name))),
     }
 }
+/// Import-only layers: OOXML highlight overrides shading across the entire
+/// inheritance chain. The public model stores the visible background only.
+#[derive(Clone, Default)]
+pub(crate) struct RunBackground {
+    highlight: Option<Color>,
+    shading: Option<Color>,
+}
+fn rgb(value: &str) -> Result<Color, DocxError> {
+    if value.len() != 6 || !value.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return Err(invalid("color must be a six-digit RGB value"));
+    }
+    let rgb = u32::from_str_radix(value, 16).map_err(|_| invalid("invalid RGB color"))?;
+    Ok(Color::rgb((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8))
+}
+fn highlight(n: &Node, d: &mut Diagnostics) -> Result<Option<Color>, DocxError> {
+    d.attrs(n, &["val"], &[]);
+    let value = n
+        .attr("val")
+        .ok_or_else(|| invalid("highlight missing val"))?;
+    let color = match value {
+        "none" => return Ok(None),
+        "black" => 0x000000,
+        "blue" => 0x0000FF,
+        "cyan" => 0x00FFFF,
+        "green" => 0x00FF00,
+        "magenta" => 0xFF00FF,
+        "red" => 0xFF0000,
+        "yellow" => 0xFFFF00,
+        "white" => 0xFFFFFF,
+        "darkBlue" => 0x000080,
+        "darkCyan" => 0x008080,
+        "darkGreen" => 0x008000,
+        "darkMagenta" => 0x800080,
+        "darkRed" => 0x800000,
+        "darkYellow" => 0x808000,
+        "darkGray" => 0x808080,
+        "lightGray" => 0xC0C0C0,
+        _ => {
+            d.warn(
+                Feature::Styles,
+                format!("Unsupported highlight color {value} omitted"),
+            );
+            return Ok(None);
+        }
+    };
+    Ok(Some(Color::rgb(
+        (color >> 16) as u8,
+        (color >> 8) as u8,
+        color as u8,
+    )))
+}
+fn shading(n: &Node, d: &mut Diagnostics) -> Result<Option<Color>, DocxError> {
+    d.attrs(n, &["val", "color", "fill"], &[]);
+    if n.attrs.keys().any(|(_, key)| key.starts_with("theme")) {
+        d.warn(
+            Feature::Styles,
+            "Theme run shading omitted; theme colors are unsupported",
+        );
+        return Ok(None);
+    }
+    let value = n
+        .attr("val")
+        .ok_or_else(|| invalid("shading missing val"))?;
+    let color = match value {
+        "nil" => return Ok(None),
+        "clear" => n.attr("fill"),
+        // Solid covers the background with its foreground pattern color.
+        "solid" => n.attr("color"),
+        _ => {
+            d.warn(
+                Feature::Styles,
+                format!("Unsupported shading pattern {value} omitted"),
+            );
+            return Ok(None);
+        }
+    };
+    match color {
+        Some(value) if value != "auto" => Ok(Some(rgb(value)?)),
+        _ => {
+            d.warn(
+                Feature::Styles,
+                "Automatic or missing shading color omitted",
+            );
+            Ok(None)
+        }
+    }
+}
+
 pub(crate) fn run_props(
     n: &Node,
     s: &mut TextStyle,
+    background: &mut RunBackground,
     toggle: bool,
     d: &mut Diagnostics,
 ) -> Result<(), DocxError> {
@@ -116,13 +205,15 @@ pub(crate) fn run_props(
             continue;
         }
         match c.name.as_str() {
-            "b" | "i" => {
+            "b" | "i" | "strike" => {
                 d.attrs(c, &["val"], &[]);
                 let v = on(c)?;
                 let dest = if c.is("b") {
                     &mut s.bold
-                } else {
+                } else if c.is("i") {
                     &mut s.italic
+                } else {
+                    &mut s.strikethrough
                 };
                 if toggle {
                     if v {
@@ -132,6 +223,17 @@ pub(crate) fn run_props(
                     *dest = v;
                 }
             }
+            "vertAlign" => {
+                d.attrs(c, &["val"], &[]);
+                s.vertical_align = match c.attr("val") {
+                    Some("baseline") => VerticalAlign::Baseline,
+                    Some("superscript") => VerticalAlign::Superscript,
+                    Some("subscript") => VerticalAlign::Subscript,
+                    _ => return Err(invalid("invalid vertical alignment")),
+                };
+            }
+            "highlight" => background.highlight = highlight(c, d)?,
+            "shd" => background.shading = shading(c, d)?,
             "u" => {
                 d.attrs(c, &["val"], &[]);
                 let v = c.attr("val").unwrap_or("single");
@@ -195,6 +297,10 @@ pub(crate) fn run_props(
                 format!("Unsupported nested formatting in {}", c.name),
             );
         }
+    }
+    s.highlight = background.highlight.or(background.shading);
+    if background.highlight.is_some() && background.shading.is_some() {
+        d.warn(Feature::Styles, "Layered highlight and shading flattened to visible highlight; underlying shading is not preserved");
     }
     s.validate()?;
     Ok(())
@@ -286,6 +392,7 @@ pub(crate) struct Styles {
     pub default_p: Option<String>,
     pub default_r: Option<String>,
     pub run: TextStyle,
+    pub background: RunBackground,
     pub paragraph: ParagraphStyle,
 }
 impl Styles {
@@ -300,7 +407,7 @@ impl Styles {
                 for c in &n.children {
                     if c.is("rPrDefault") {
                         if let Some(r) = c.child("rPr") {
-                            run_props(r, &mut styles.run, false, d)?;
+                            run_props(r, &mut styles.run, &mut styles.background, false, d)?;
                         }
                     } else if c.is("pPrDefault") {
                         if let Some(p) = c.child("pPr") {
@@ -381,7 +488,8 @@ impl Styles {
         for id in styles.definitions.keys() {
             let mut run = styles.run.clone();
             let mut paragraph = styles.paragraph.clone();
-            styles.apply(id, &mut run, Some(&mut paragraph), d)?;
+            let mut background = styles.background.clone();
+            styles.apply(id, &mut run, &mut background, Some(&mut paragraph), d)?;
         }
         Ok(styles)
     }
@@ -421,6 +529,7 @@ impl Styles {
         &self,
         id: &str,
         run: &mut TextStyle,
+        background: &mut RunBackground,
         mut paragraph: Option<&mut ParagraphStyle>,
         d: &mut Diagnostics,
     ) -> Result<(), DocxError> {
@@ -440,7 +549,7 @@ impl Styles {
                 para_props(p, style, d)?;
             }
             if let Some(r) = n.child("rPr") {
-                run_props(r, run, true, d)?;
+                run_props(r, run, background, true, d)?;
             }
         }
         Ok(())

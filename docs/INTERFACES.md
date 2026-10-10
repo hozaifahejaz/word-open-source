@@ -18,8 +18,11 @@ allowed, CR/LF/form-feed are not (breaks are structural). `validate()` checks
 structure, text, styles and layout. `normalize()` drops empty runs and merges
 adjacent equal styles. Only represented model content can be preserved.
 
-`TextStyle` stores bold/italic/underline, font family, positive
-`size_half_points` (24 = 12pt), and RGB `Color`. Font names are metadata; the
+`TextStyle` stores bold/italic/underline/strikethrough, font family, positive
+`size_half_points` (24 = 12pt), RGB `Color`, mutually exclusive `VerticalAlign`
+(Baseline/Superscript/Subscript), and optional RGB `highlight`. New fields default
+to false/baseline/None when decoding older document snapshots; vertical alignment
+serializes as `baseline`, `superscript`, or `subscript`. Font names are metadata; the
 core neither bundles nor resolves fonts. Theme colors, font fallback, underline
 variants, and complex-script font slots are not represented.
 
@@ -80,6 +83,12 @@ feed is rejected. Unspecified insertion style inherits from the run to the left,
 the first run at paragraph start, or an empty paragraph's default style. The UI
 keeps pending typing style for collapsed formatting and passes `Some(TextStyle)`
 when inserting. `Some(false)` explicitly clears a boolean; `None` preserves it.
+`StylePatch::highlight` uses `None` to preserve, `Some(None)` to clear and
+`Some(Some(color))` to set a background. `StylePatch::apply` is shared by core
+transactions and pending desktop typing style; callers validate the resulting
+style before retaining it. Clear formatting supplies defaults for every property.
+Workspace and recovery envelopes now write schema 2, accept schema 1 with these
+style defaults, and reject schema 3+ before decoding or replacing its data.
 Replacement keeps the starting paragraph's properties in the first/intermediate
 paragraphs and the ending paragraph's properties in the last new paragraph.
 Joining keeps the starting properties. Carets snap forward when an edit creates

@@ -60,7 +60,13 @@ pub fn is_serif_family(family: &str) -> bool {
     family.eq_ignore_ascii_case("serif") || family.eq_ignore_ascii_case("Noto Serif")
 }
 fn format(style: &TextStyle, spacing: LineSpacing, zoom: f32) -> TextFormat {
-    let size = style.size_half_points as f32 * 0.5 * 96.0 / 72.0 * zoom;
+    let base_size = style.size_half_points as f32 * 0.5 * 96.0 / 72.0 * zoom;
+    let scale = if style.vertical_align == VerticalAlign::Baseline {
+        1.0
+    } else {
+        0.75
+    };
+    let size = base_size * scale;
     let family = if is_serif_family(&style.font_family) {
         "Serif"
     } else {
@@ -73,7 +79,7 @@ fn format(style: &TextStyle, spacing: LineSpacing, zoom: f32) -> TextFormat {
         _ => "Regular",
     };
     let color = Color32::from_rgb(style.color.red, style.color.green, style.color.blue);
-    let natural = size * 1.35;
+    let natural = base_size * 1.35;
     let line_height = match spacing {
         LineSpacing::Multiple(n) => natural * n as f32 / 100.0,
         LineSpacing::Exact(n) => n as f32 / 15.0 * zoom,
@@ -87,7 +93,23 @@ fn format(style: &TextStyle, spacing: LineSpacing, zoom: f32) -> TextFormat {
         } else {
             Stroke::NONE
         },
-        line_height: Some(line_height),
+        // egui aligns using row height minus *glyph line height*. Script
+        // sections must be shorter as well as using a smaller font.
+        line_height: Some(line_height * scale),
+        valign: match style.vertical_align {
+            VerticalAlign::Baseline => egui::Align::Center,
+            VerticalAlign::Superscript => egui::Align::TOP,
+            VerticalAlign::Subscript => egui::Align::BOTTOM,
+        },
+        strikethrough: if style.strikethrough {
+            Stroke::new(zoom, color)
+        } else {
+            Stroke::NONE
+        },
+        background: style
+            .highlight
+            .map(|c| Color32::from_rgb(c.red, c.green, c.blue))
+            .unwrap_or(Color32::TRANSPARENT),
         ..Default::default()
     }
 }
@@ -181,13 +203,63 @@ impl DocumentLayout {
                 boundaries
             });
             let mut char_start = 0;
-            for placed in &galley.rows {
+            for (row_index, original_row) in galley.rows.iter().enumerate() {
+                let row_count = original_row.char_count_excluding_newline();
+                let start = char_bytes[char_start];
+                let end = char_bytes[char_start + row_count];
+                let minimum = galley
+                    .job
+                    .sections
+                    .iter()
+                    .filter(|section| {
+                        section.byte_range.start < end && section.byte_range.end > start
+                    })
+                    .map(|section| {
+                        let height = section.format.line_height.unwrap_or(0.0);
+                        if section.format.valign == egui::Align::Center {
+                            height
+                        } else {
+                            height / 0.75
+                        }
+                    })
+                    .fold(0.0_f32, f32::max);
+                // first_row_min_height only affects the first row in egui. Shape
+                // a bounded window (this row and its continuation) when a row
+                // has no full-height glyph. Keeping the continuation preserves
+                // original wrapping and justification; no artificial glyphs
+                // enter the document or its caret map.
+                let adjusted;
+                let placed = if minimum > original_row.height() + 0.5 {
+                    let next_count = galley
+                        .rows
+                        .get(row_index + 1)
+                        .map(|row| row.char_count_including_newline())
+                        .unwrap_or(0);
+                    let window_end = char_bytes[(char_start
+                        + original_row.char_count_including_newline()
+                        + next_count)
+                        .min(char_bytes.len() - 1)];
+                    let mut row_job = LayoutJob::default();
+                    row_job.wrap.max_width = content_width;
+                    row_job.justify = p.style.alignment == Alignment::Justify;
+                    row_job.first_row_min_height = minimum;
+                    for section in &galley.job.sections {
+                        let a = start.max(section.byte_range.start);
+                        let b = window_end.min(section.byte_range.end);
+                        if a < b {
+                            row_job.append(&text[a..b], 0.0, section.format.clone());
+                        }
+                    }
+                    adjusted = ctx.fonts(|f| f.layout_job(row_job));
+                    &adjusted.rows[0]
+                } else {
+                    original_row
+                };
                 let row_height = placed.height().max(1.0);
                 if y + row_height > bottom && y > top {
                     page_index += 1;
                     y = top;
                 }
-                let row_count = placed.char_count_excluding_newline();
                 let x = m.left as f32 * unit
                     + match p.style.alignment {
                         Alignment::Center => (content_width - placed.size.x) * 0.5,
@@ -227,7 +299,7 @@ impl DocumentLayout {
                     start: char_bytes[char_start],
                     end: char_bytes[char_start + row_count],
                 });
-                char_start += placed.char_count_including_newline();
+                char_start += original_row.char_count_including_newline();
                 y += row_height;
             }
             y += (p.style.space_after_twips as f32 * unit).min(bottom - top);
@@ -365,6 +437,155 @@ impl DocumentLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn rich_scripts_have_real_vertical_offsets_and_grapheme_safe_hits() {
+        for zoom in [0.75, 1.0, 1.5] {
+            let doc = Document {
+                blocks: vec![Block::Paragraph(Paragraph {
+                    runs: vec![
+                        Run::new("x", TextStyle::default()),
+                        Run::new(
+                            "e\u{301}",
+                            TextStyle {
+                                vertical_align: VerticalAlign::Superscript,
+                                strikethrough: true,
+                                highlight: Some(Color::rgb(240, 230, 120)),
+                                ..Default::default()
+                            },
+                        ),
+                        Run::new(
+                            "e",
+                            TextStyle {
+                                vertical_align: VerticalAlign::Subscript,
+                                ..Default::default()
+                            },
+                        ),
+                    ],
+                    ..Default::default()
+                })],
+                ..Default::default()
+            };
+            with_layout(&doc, zoom, |layout| {
+                let line = &layout.lines[0];
+                let sections = &line.galley.job.sections;
+                assert!(
+                    (sections[1].format.font_id.size / sections[0].format.font_id.size - 0.75)
+                        .abs()
+                        < 0.001
+                );
+                assert_eq!(
+                    sections[1].format.background,
+                    Color32::from_rgb(240, 230, 120)
+                );
+                assert!(sections[1].format.strikethrough.width > 0.0);
+                let glyphs = &line.galley.rows[0].glyphs;
+                // Compare the same glyph/font: subscript must genuinely be lower.
+                assert!(glyphs[3].pos.y > glyphs[1].pos.y + zoom * 2.0, "{glyphs:?}");
+                assert!(glyphs[1].pos.y < glyphs[0].pos.y);
+                assert_eq!(
+                    line.stops.iter().map(|s| s.at.offset).collect::<Vec<_>>(),
+                    vec![0, 1, 4, 5]
+                );
+                for stop in &line.stops {
+                    let caret = layout.caret(stop.at).unwrap();
+                    assert_eq!(
+                        layout.hit(Pos2::new(stop.x, caret.center().y)),
+                        Some(stop.at)
+                    );
+                }
+                let rects = layout
+                    .selection_rects(Selection::new(Position::new(0, 1), Position::new(0, 4)));
+                assert_eq!(rects.len(), 1);
+                assert!(rects[0].width() > 0.0);
+            });
+            let script = Document {
+                blocks: vec![Block::Paragraph(Paragraph {
+                    runs: vec![Run::new(
+                        "e".repeat(300),
+                        TextStyle {
+                            vertical_align: VerticalAlign::Subscript,
+                            ..Default::default()
+                        },
+                    )],
+                    ..Default::default()
+                })],
+                ..Default::default()
+            };
+            with_layout(&script, zoom, |layout| {
+                for line in &layout.lines {
+                    let glyph = &line.galley.rows[0].glyphs[0];
+                    assert!(line.rect.height() > glyph.line_height + zoom * 2.0);
+                    assert!(glyph.pos.y > glyph.font_impl_ascent + zoom * 2.0);
+                }
+            });
+        }
+    }
+    #[test]
+    fn rich_script_wrapping_preserves_justification_and_background_meshes() {
+        let doc = Document {
+            blocks: vec![Block::Paragraph(Paragraph {
+                runs: vec![Run::new(
+                    "é words 👩‍💻 spaced ".repeat(80),
+                    TextStyle {
+                        vertical_align: VerticalAlign::Subscript,
+                        highlight: Some(Color::rgb(240, 230, 120)),
+                        strikethrough: true,
+                        ..Default::default()
+                    },
+                )],
+                style: ParagraphStyle {
+                    alignment: Alignment::Justify,
+                    ..Default::default()
+                },
+                ..Default::default()
+            })],
+            ..Default::default()
+        };
+        with_layout(&doc, 1.0, |layout| {
+            assert!(layout.lines.len() > 2);
+            let mut end = 0;
+            for (index, line) in layout.lines.iter().enumerate() {
+                assert_eq!(line.start, end);
+                end = line.end;
+                let text = doc.paragraph(0).unwrap().text();
+                assert_eq!(
+                    line.galley.rows[0]
+                        .glyphs
+                        .iter()
+                        .map(|g| g.chr)
+                        .collect::<String>(),
+                    text[line.start..line.end]
+                );
+                let content = layout.pages[0].width()
+                    - (doc.page_layout.margins.left + doc.page_layout.margins.right) as f32 / 15.0;
+                if index + 1 < layout.lines.len() {
+                    assert!((line.rect.width() - content).abs() < 1.0);
+                }
+                assert!(
+                    line.galley.rows[0]
+                        .visuals
+                        .mesh
+                        .vertices
+                        .iter()
+                        .any(|v| v.color == Color32::from_rgb(240, 230, 120))
+                );
+                for stop in &line.stops {
+                    let (hit, hint) = layout
+                        .hit_line(Pos2::new(stop.x, line.rect.center().y))
+                        .unwrap();
+                    // Justification can collapse trailing whitespace stops at
+                    // the same x. The returned caret must occupy that position.
+                    let hit_stop = line.stops.iter().find(|s| s.at == hit).unwrap();
+                    assert!((hit_stop.x - stop.x).abs() < 0.01);
+                    assert!(
+                        layout.caret_with_hint(hit, Some(hint)).unwrap().center().y
+                            == line.rect.center().y
+                    );
+                }
+            }
+            assert_eq!(end, doc.paragraph(0).unwrap().len_bytes());
+        });
+    }
     #[test]
     fn caret_stops_do_not_split_graphemes_across_styled_runs() {
         let doc = Document {
